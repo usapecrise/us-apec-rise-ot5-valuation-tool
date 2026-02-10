@@ -1,3 +1,6 @@
+APP_VERSION = "v1.0.0"
+METHODOLOGY_DOC = "docs/ot5_methodology.md"
+
 import streamlit as st
 from datetime import date
 
