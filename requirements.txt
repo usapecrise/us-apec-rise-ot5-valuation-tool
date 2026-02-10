@@ -1,3 +1,4 @@
 streamlit
 requests
 python-dotenv
+PyPDF2
