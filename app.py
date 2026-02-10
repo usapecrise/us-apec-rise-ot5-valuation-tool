@@ -5,21 +5,21 @@ from io import BytesIO
 from PyPDF2 import PdfReader
 
 # =========================================================
-# CONFIG
+# APP CONFIG
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("OT5 / PSE-4 Private Sector Valuation Tool")
 st.caption("Implements standardized OT5 methodology (labor + travel valuation)")
 
 # =========================================================
-# CONSTANTS (FIXED FOR PROJECT LIFE)
+# CONSTANTS
 # =========================================================
 HOURLY_RATES = {
     "Executive / Senior Leadership": 149,
     "Senior Specialist": 131
 }
 
-LABOR_MULTIPLIER = 3.5          # Presentation (1x) + Prep (2x) + Follow-up (0.5x)
+LABOR_MULTIPLIER = 3.5          # 1x presentation + 2x prep + 0.5x follow-up
 STANDARD_TRAVEL_DAYS = 2        # Outbound + return
 TRAVEL_DAY_MIE_FACTOR = 0.75    # 75% M&IE on travel days
 
@@ -46,18 +46,24 @@ def extract_text_from_pdf(uploaded_file):
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def extract_presentation_hours(text):
+def extract_speaker_hours(agenda_text, speaker_name):
     """
-    Extracts time blocks like 10:00–11:30 or 10:00 - 11:00
+    Extracts presentation hours ONLY for agenda lines
+    that contain the speaker's name.
     """
-    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
-    matches = re.findall(pattern, text)
-
     total_hours = 0.0
-    for start, end in matches:
-        s = datetime.strptime(start, "%H:%M")
-        e = datetime.strptime(end, "%H:%M")
-        total_hours += (e - s).seconds / 3600
+    speaker_lower = speaker_name.lower()
+
+    lines = agenda_text.splitlines()
+    time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+
+    for line in lines:
+        if speaker_lower in line.lower():
+            matches = re.findall(time_pattern, line)
+            for start, end in matches:
+                s = datetime.strptime(start, "%H:%M")
+                e = datetime.strptime(end, "%H:%M")
+                total_hours += (e - s).seconds / 3600
 
     return round(total_hours, 2)
 
@@ -135,16 +141,24 @@ agenda_text = st.text_area(
     "Agenda Text",
     value=agenda_text,
     height=220,
-    help="Agenda should include session times (e.g., 10:00–11:00)."
+    help="Agenda lines must include speaker name and session time (e.g., 10:00–11:00 Jane Smith)."
 )
 
-auto_hours = extract_presentation_hours(agenda_text) if agenda_text else 0.0
+auto_hours = 0.0
+if speaker_name and agenda_text:
+    auto_hours = extract_speaker_hours(agenda_text, speaker_name)
 
 presentation_hours = st.number_input(
     "Presentation Hours (auto-detected; override if needed)",
     value=auto_hours,
     step=0.25
 )
+
+if speaker_name and agenda_text and auto_hours == 0:
+    st.warning(
+        "No agenda sessions matched this speaker name. "
+        "Check spelling or override presentation hours manually."
+    )
 
 # =========================================================
 # B. BIO & SENIORITY
@@ -194,14 +208,12 @@ airfare = st.number_input("Estimated Round-Trip Airfare (USD)", min_value=0.0)
 
 lodging_rate = st.number_input(
     "DOS Lodging Rate per Night (USD)",
-    min_value=0.0,
-    help="Enter rate from DOS or GSA per diem tables."
+    min_value=0.0
 )
 
 mie_rate = st.number_input(
     "DOS M&IE Rate per Day (USD)",
-    min_value=0.0,
-    help="Enter rate from DOS or GSA per diem tables."
+    min_value=0.0
 )
 
 workshops_on_trip = st.number_input(
@@ -222,22 +234,19 @@ travel = calculate_travel(
 st.markdown(f"**Allocated Travel Contribution:** ${travel['allocated_travel']:,.2f}")
 
 # =========================================================
-# D. CONTRIBUTION DETAILS (MANUAL CLASSIFICATION)
+# D. MANUAL CLASSIFICATION
 # =========================================================
 st.subheader("D. Contribution Details")
 
 firm_name = st.text_input("Firm Name")
 host_economy = st.text_input("Host Economy (Workshop Location)")
+
 resource_origin = st.selectbox(
     "Resource Origin",
     ["U.S.-based", "Host Country-based", "Third Country-based"]
 )
 
-resource_type = st.selectbox(
-    "Resource Type",
-    ["In-kind"],
-    index=0
-)
+resource_type = st.selectbox("Resource Type", ["In-kind"])
 
 faos = st.multiselect(
     "U.S. FAOs Addressed",
