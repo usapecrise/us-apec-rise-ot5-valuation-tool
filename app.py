@@ -9,7 +9,7 @@ from PyPDF2 import PdfReader
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption("Labor category and hours derived from official workshop agenda")
+st.caption("Labor and travel valuation derived from official workshop agenda and standardized rates")
 
 # =========================================================
 # CONSTANTS (FIXED FOR PROJECT LIFE)
@@ -22,6 +22,13 @@ HOURLY_RATES = {
 LABOR_MULTIPLIER = 3.5          # 1x presentation + 2x prep + 0.5x follow-up
 STANDARD_TRAVEL_DAYS = 2
 TRAVEL_DAY_MIE_FACTOR = 0.75
+
+# Standardized airfare bands (USD)
+AIRFARE_BANDS = {
+    "Domestic (same economy)": 550,
+    "Regional (same region)": 700,
+    "Intercontinental": 1400
+}
 
 FAO_OPTIONS = [
     "Peace and Security",
@@ -84,9 +91,6 @@ def extract_speaker_hours(agenda_text, speaker_name):
 
 
 def assess_seniority_from_agenda(agenda_block):
-    """
-    Assigns labor category based solely on agenda-listed current role titles.
-    """
     t = agenda_block.lower()
 
     executive_title_patterns = [
@@ -114,7 +118,7 @@ def assess_seniority_from_agenda(agenda_block):
         if re.search(pattern, t):
             return (
                 "Executive / Senior Leadership",
-                f"Agenda-listed title matched pattern: '{pattern}'"
+                f"Agenda-listed title matched: '{pattern}'"
             )
 
     return (
@@ -182,12 +186,12 @@ presentation_hours = st.number_input(
 )
 
 if speaker_name and agenda_text and presentation_hours == 0:
-    st.warning("Speaker name not matched to agenda sessions. Check spelling or override hours.")
+    st.warning("Speaker not matched to agenda sessions. Check spelling or override hours.")
 
 # =========================================================
-# B. LABOR CATEGORY (AGENDA ONLY)
+# B. LABOR CATEGORY (AGENDA-BASED)
 # =========================================================
-st.subheader("B. Labor Category (Agenda-Based)")
+st.subheader("B. Labor Category")
 
 if agenda_block:
     suggested_category, rationale = assess_seniority_from_agenda(agenda_block)
@@ -197,10 +201,6 @@ else:
 
 st.info(f"Suggested Category: **{suggested_category}**")
 st.caption(rationale)
-st.caption(
-    "Labor category is determined solely from the speaker’s current role "
-    "as listed in the official workshop agenda. Staff may override if needed."
-)
 
 category = st.selectbox(
     "Confirm or Override Category",
@@ -212,14 +212,24 @@ labor_value = calculate_labor(category, presentation_hours)
 st.markdown(f"**Labor Contribution:** ${labor_value:,.2f}")
 
 # =========================================================
-# C. TRAVEL VALUATION
+# C. TRAVEL VALUATION (STANDARDIZED AIRFARE)
 # =========================================================
 st.subheader("C. Travel Valuation")
+
+home_economy = st.text_input("Speaker Home Economy")
+host_economy = st.text_input("Workshop Host Economy")
+
+trip_type = st.selectbox(
+    "Trip Type (standardized airfare)",
+    options=list(AIRFARE_BANDS.keys())
+)
+
+airfare = AIRFARE_BANDS[trip_type]
+st.caption(f"Standardized airfare applied: ${airfare:,.0f}")
 
 travel_start = st.date_input("Travel Start Date")
 travel_end = st.date_input("Travel End Date")
 
-airfare = st.number_input("Estimated Round-Trip Airfare (USD)", min_value=0.0)
 lodging_rate = st.number_input("DOS Lodging Rate per Night (USD)", min_value=0.0)
 mie_rate = st.number_input("DOS M&IE Rate per Day (USD)", min_value=0.0)
 
@@ -241,12 +251,11 @@ travel_value = calculate_travel(
 st.markdown(f"**Allocated Travel Contribution:** ${travel_value:,.2f}")
 
 # =========================================================
-# D. MANUAL POLICY FIELDS
+# D. POLICY CLASSIFICATION
 # =========================================================
-st.subheader("D. Policy Classification (Manual)")
+st.subheader("D. Policy Classification")
 
 firm_name = st.text_input("Firm Name")
-host_economy = st.text_input("Host Economy")
 
 resource_origin = st.selectbox(
     "Resource Origin",
@@ -282,6 +291,6 @@ st.write({
 })
 
 st.caption(
-    "Final values should be entered into the Airtable "
+    "Final OT5 values should be entered into the Airtable "
     "‘OT5 Private Sector Resources’ table as the system of record."
 )
