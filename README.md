@@ -3,46 +3,196 @@
 ## Overview
 
 This repository contains the **OT5 / PSE-4 Private Sector Valuation Tool** developed for the **US APEC–RISE** program.  
-The tool provides a **standardized, auditable, and policy-aligned method** for valuing private sector speaker and moderator contributions attributable to US APEC–RISE activities.
+The tool implements a **standardized, transparent, and auditable methodology** for valuing private sector speaker and moderator contributions that are reasonably attributable to US APEC–RISE activities.
 
-The methodology and calculations implemented here support reporting under **OT5 (PSE-4): “Reasonably quantifiable private sector resource commitments attributable to USG engagement.”**
+The methodology and calculations implemented here support reporting under **OT5 (PSE-4)**, which captures:
+
+> *“Reasonably quantifiable private sector resource commitments attributable to USG engagement.”*
+
+This tool is intended for **internal program use** and supports consistent valuation across workshops, economies, and reporting periods.
 
 ---
 
-## Purpose
+## Purpose and Rationale
 
-This tool is designed to:
-- Ensure **consistent valuation** of private sector in-kind contributions across workshops and economies
-- Apply **fixed, transparent assumptions** aligned with U.S. Department of State guidance
-- Maintain **traceability and audit readiness** for quarterly and annual reporting
-- Support **human-in-the-loop decision-making** where professional judgment is required
+US APEC–RISE engages private sector experts as speakers and moderators across a range of technical workshops. These contributions often represent **voluntary in-kind labor** and **privately funded travel** that would not have occurred absent USG engagement.
 
-The tool intentionally avoids automated data scraping or individual salary collection. Only publicly available or voluntarily provided information is used.
+This tool was developed to:
+
+- Ensure **consistent valuation** of private sector contributions
+- Apply **fixed, standardized assumptions** across all workshops
+- Maintain **traceability and audit readiness** for OT5 reporting
+- Align with U.S. Department of State guidance, including OPUDATA and 18 FAM 301
+- Preserve **human judgment** where policy requires manual review
+
+The tool intentionally avoids automated data scraping, individual salary collection, or dynamic recalculation of historical values.
 
 ---
 
 ## What the Tool Does
 
-The Streamlit application:
-- Captures standardized inputs related to:
-  - Speaker category
+The Streamlit application in this repository:
+
+- Collects standardized inputs related to:
+  - Speaker professional category
   - Presentation hours
   - Travel eligibility and duration
 - Applies fixed labor and travel valuation formulas
-- Separates **labor contribution** and **travel contribution**
-- Produces a total OT5 valuation per workshop
+- Separates **labor contributions** and **travel contributions**
+- Calculates a **total OT5 value per workshop**
 - Supports documentation and justification for each valuation
+- Produces values that are entered into Airtable as the system of record
 
-The tool calculates values once and is intended to write final results into the program’s **Airtable OT5 Private Sector Resources** table, which serves as the system of record.
+The tool calculates values **once per entry** and does not retroactively update or revalue historical contributions.
 
 ---
 
 ## Valuation Methodology (Summary)
 
+### Professional Categories and Hourly Rates
+
+Private sector speakers and moderators are assigned to one of two standardized professional categories:
+
+| Category | Description |
+|--------|-------------|
+| Executive / Senior Leadership | Senior executives and leaders with 15+ years of experience |
+| Senior Specialist | Senior technical experts with approximately 10–15 years of experience |
+
+Hourly rates for each category were established through a one-time salary benchmarking exercise using publicly available sources and are **fixed for the duration of the project**.
+
+---
+
 ### Labor Valuation
-- Speakers are assigned to one of two standardized professional categories:
-  - Executive / Senior Leadership
-  - Senior Specialist
-- Hourly rates are fixed for the life of the project
-- Total labor hours are calculated as:
-  
+
+Labor time includes:
+- Presentation time
+- Standardized preparation time
+- Standardized follow-up time
+
+To ensure consistency and avoid over- or under-estimation, total labor hours are calculated using a fixed multiplier:
+
+Total Labor Hours = 3.5 × Presentation Hours
+
+Labor contribution is calculated as:
+
+Labor Contribution (USD) = Hourly Rate × Total Labor Hours
+
+
+This ratio is applied uniformly across all workshops and speakers.
+
+---
+
+### Travel Valuation
+
+When travel is **privately funded** and **incremental to participation in a US APEC–RISE activity**, travel costs may be valued.
+
+Travel valuation includes:
+- Estimated round-trip economy airfare
+- Lodging based on U.S. Department of State foreign per diem rates
+- M&IE based on U.S. Department of State foreign per diem rates
+
+Standardized assumptions include:
+- Two travel days per trip (outbound and return)
+- 75% of M&IE on travel days
+- 100% of M&IE on full days in location
+- Travel time itself is **not valued as labor**
+
+For multi-workshop trips, travel costs are allocated evenly across workshops to prevent double counting.
+
+---
+
+## What the Tool Does *Not* Do
+
+This tool intentionally does **not**:
+
+- Scrape LinkedIn or other external platforms
+- Collect or store individual salary data
+- Automatically assign professional categories without staff review
+- Recalculate or update historical OT5 values
+- Value time spent in transit as labor
+
+These design choices support conservative valuation, compliance with platform terms of use, and audit defensibility.
+
+---
+
+## Repository Structure
+
+us-apec-rise-ot5-valuation-tool/
+│
+├── app.py
+│ Streamlit application used to calculate OT5 values
+│
+├── valuation/
+│ Core calculation logic (labor, travel, OT5 wrapper)
+│
+├── docs/
+│ Written methodology and data quality documentation
+│
+├── examples/
+│ Sample inputs for testing or staff training
+│
+├── requirements.txt
+│ Python dependencies
+│
+└── README.md
+│ Repository overview and usage guidance
+
+---
+
+## Running the Application
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+
+   streamlit run app.py
+
+
+
+
+
+   Data Storage and Reporting
+
+Final OT5 values generated by this tool are entered into the Airtable “OT5 Private Sector Resources” table, which serves as the authoritative system of record.
+
+Aggregated OT5 values are used for:
+
+Quarterly performance reporting
+
+Annual reporting
+
+Internal monitoring and evaluation
+
+Governance and Change Management
+
+All valuation assumptions are fixed for the duration of the project
+
+Any changes to rates, formulas, or categories must be documented and approved
+
+The repository serves as the authoritative reference for OT5 valuation logic
+
+Historical valuations are not recalculated once recorded
+
+Intended Audience
+
+This repository is intended for:
+
+US APEC–RISE Monitoring & Evaluation staff
+
+Program management and reporting teams
+
+Internal reviewers and auditors
+
+It is not intended for public use or external submission without appropriate context.
+
+Contact
+
+For questions regarding methodology, valuation assumptions, or use of this tool,
+contact the US APEC–RISE Monitoring & Evaluation Lead.
+
+
+
+
+
+
+
