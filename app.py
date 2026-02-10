@@ -1,42 +1,27 @@
 import streamlit as st
-import requests
-from datetime import date
-from dotenv import load_dotenv
-import os
+import re
+from datetime import datetime, date
+from io import BytesIO
+from PyPDF2 import PdfReader
 
 # =========================================================
-# ENVIRONMENT
+# CONFIG
 # =========================================================
-load_dotenv()
-
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-AIRTABLE_OT5_TABLE = os.getenv("AIRTABLE_OT5_TABLE")
-
-HEADERS = {
-    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-    "Content-Type": "application/json"
-}
+st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
+st.title("OT5 / PSE-4 Private Sector Valuation Tool")
+st.caption("Implements standardized OT5 methodology (labor + travel valuation)")
 
 # =========================================================
-# APP METADATA
-# =========================================================
-APP_VERSION = "v1.0.0"
-INDICATOR_ID = "OT5"
-
-# =========================================================
-# CONSTANTS (POLICY-LOCKED)
+# CONSTANTS (FIXED FOR PROJECT LIFE)
 # =========================================================
 HOURLY_RATES = {
     "Executive / Senior Leadership": 149,
     "Senior Specialist": 131
 }
 
-LABOR_MULTIPLIER = 3.5
-STANDARD_TRAVEL_DAYS = 2
-TRAVEL_DAY_MIE_FACTOR = 0.75
-
-RESOURCE_TYPE = "In-kind"
+LABOR_MULTIPLIER = 3.5          # Presentation (1x) + Prep (2x) + Follow-up (0.5x)
+STANDARD_TRAVEL_DAYS = 2        # Outbound + return
+TRAVEL_DAY_MIE_FACTOR = 0.75    # 75% M&IE on travel days
 
 FAO_OPTIONS = [
     "Peace and Security",
@@ -56,154 +41,168 @@ FAO_OPTIONS = [
 # =========================================================
 # HELPERS
 # =========================================================
-@st.cache_data(ttl=3600)
-def fetch_airtable_options(table_name):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{table_name}"
-    options = set()
-    offset = None
+def extract_text_from_pdf(uploaded_file):
+    reader = PdfReader(BytesIO(uploaded_file.read()))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
 
-    while True:
-        params = {"offset": offset} if offset else {}
-        r = requests.get(url, headers=HEADERS, params=params)
-        r.raise_for_status()
-        data = r.json()
 
-        for record in data["records"]:
-            value = next(iter(record["fields"].values()), None)
-            if value:
-                options.add(value)
+def extract_presentation_hours(text):
+    """
+    Extracts time blocks like 10:00–11:30 or 10:00 - 11:00
+    """
+    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+    matches = re.findall(pattern, text)
 
-        offset = data.get("offset")
-        if not offset:
-            break
+    total_hours = 0.0
+    for start, end in matches:
+        s = datetime.strptime(start, "%H:%M")
+        e = datetime.strptime(end, "%H:%M")
+        total_hours += (e - s).seconds / 3600
 
-    return sorted(options)
+    return round(total_hours, 2)
+
+
+def assess_seniority(bio_text):
+    executive_keywords = [
+        "ceo", "coo", "cfo", "president", "vice president", "vp",
+        "managing director", "partner", "country director",
+        "regional director", "chief", "head of"
+    ]
+
+    text = bio_text.lower()
+    for kw in executive_keywords:
+        if kw in text:
+            return "Executive / Senior Leadership", f"Detected keyword: '{kw}'"
+
+    return "Senior Specialist", "No executive-level keywords detected"
+
+
+def calculate_labor(category, presentation_hours):
+    return round(
+        HOURLY_RATES[category] * presentation_hours * LABOR_MULTIPLIER, 2
+    )
+
+
+def calculate_travel(
+    airfare,
+    lodging_rate,
+    mie_rate,
+    start_date,
+    end_date,
+    workshops_on_trip
+):
+    days = (end_date - start_date).days + 1
+    nights = max(days - 1, 0)
+
+    lodging_cost = lodging_rate * nights
+    mie_travel_days = mie_rate * TRAVEL_DAY_MIE_FACTOR * STANDARD_TRAVEL_DAYS
+    mie_full_days = mie_rate * max(days - STANDARD_TRAVEL_DAYS, 0)
+
+    total_travel = airfare + lodging_cost + mie_travel_days + mie_full_days
+    allocated_travel = total_travel / workshops_on_trip
+
+    return {
+        "days": days,
+        "nights": nights,
+        "lodging_cost": round(lodging_cost, 2),
+        "mie_travel_days": round(mie_travel_days, 2),
+        "mie_full_days": round(mie_full_days, 2),
+        "total_travel": round(total_travel, 2),
+        "allocated_travel": round(allocated_travel, 2)
+    }
 
 
 def derive_usg_fiscal_year(d):
     return d.year + 1 if d.month >= 10 else d.year
 
-
-def derive_resource_origin(firm_economy, assistance_location):
-    if firm_economy == "United States":
-        return "U.S.-based"
-    if firm_economy == assistance_location:
-        return "Host Country-based"
-    return "Third Country-based"
-
-
-def calculate_labor(category, presentation_hours):
-    return round(HOURLY_RATES[category] * presentation_hours * LABOR_MULTIPLIER, 2)
-
-
-def calculate_travel(airfare, lodging_rate, mie_rate, start, end, workshops):
-    days = (end - start).days + 1
-    nights = max(days - 1, 0)
-
-    lodging = lodging_rate * nights
-    mie_full = mie_rate * max(days - STANDARD_TRAVEL_DAYS, 0)
-    mie_travel = mie_rate * TRAVEL_DAY_MIE_FACTOR * STANDARD_TRAVEL_DAYS
-
-    total = airfare + lodging + mie_full + mie_travel
-    return round(total / workshops, 2)
-
-
-def submit_to_airtable(payload):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_OT5_TABLE}"
-    r = requests.post(url, headers=HEADERS, json={"fields": payload})
-    r.raise_for_status()
-    return r.json()
-
 # =========================================================
-# STREAMLIT CONFIG
+# A. SPEAKER & AGENDA
 # =========================================================
-st.set_page_config(
-    page_title="OT5 Valuation Tool",
-    layout="centered"
+st.subheader("A. Speaker & Agenda")
+
+speaker_name = st.text_input("Speaker Name")
+
+agenda_file = st.file_uploader(
+    "Upload Agenda (PDF) or paste agenda text below",
+    type=["pdf"]
 )
 
-st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption(f"Version {APP_VERSION} — Indicator {INDICATOR_ID}")
-st.divider()
+agenda_text = ""
+if agenda_file:
+    agenda_text = extract_text_from_pdf(agenda_file)
 
-# =========================================================
-# DROPDOWN DATA
-# =========================================================
-economy_options = fetch_airtable_options("Economy Reference List")
-workstream_options = fetch_airtable_options("Workstream Reference List")
-engagement_options = fetch_airtable_options("Workshop Reference List")
-
-# =========================================================
-# A. ELIGIBILITY
-# =========================================================
-st.subheader("A. Private Sector Eligibility")
-
-eligible = st.checkbox("This contribution is from a private sector entity eligible under OT5.")
-if not eligible:
-    st.stop()
-
-firm = st.selectbox("Firm", firm_options)
-firm_economy = st.selectbox("Firm Home Economy", economy_options)
-
-assistance_location = st.selectbox(
-    "Assistance Location (Host Economy)",
-    economy_options,
-    help="Economy where the activity/workshop took place."
+agenda_text = st.text_area(
+    "Agenda Text",
+    value=agenda_text,
+    height=220,
+    help="Agenda should include session times (e.g., 10:00–11:00)."
 )
 
-resource_origin = derive_resource_origin(firm_economy, assistance_location)
-st.markdown(f"**Resource Origin (derived):** {resource_origin}")
-
-st.divider()
-
-# =========================================================
-# B. CONTEXT
-# =========================================================
-st.subheader("B. Contribution Context")
-
-engagement = st.selectbox("Engagement", engagement_options)
-workstream = st.selectbox("Workstream", workstream_options)
-
-faos = st.multiselect(
-    "U.S. FAOs Addressed",
-    FAO_OPTIONS,
-    default=["Economic Growth (Other)"]
-)
-
-contribution_date = st.date_input("Contribution Date (Agenda Date)")
-fiscal_year = f"FY {derive_usg_fiscal_year(contribution_date)}"
-
-st.markdown(f"**Fiscal Year (derived):** {fiscal_year}")
-
-st.divider()
-
-# =========================================================
-# C. VALUATION
-# =========================================================
-st.subheader("C. Valuation")
+auto_hours = extract_presentation_hours(agenda_text) if agenda_text else 0.0
 
 presentation_hours = st.number_input(
-    "Presentation Hours (agenda-based)",
-    min_value=0.0,
+    "Presentation Hours (auto-detected; override if needed)",
+    value=auto_hours,
     step=0.25
 )
 
-category = st.selectbox("Professional Category", list(HOURLY_RATES.keys()))
-labor_value = calculate_labor(category, presentation_hours)
+# =========================================================
+# B. BIO & SENIORITY
+# =========================================================
+st.subheader("B. Bio & Seniority Assessment")
 
+bio_file = st.file_uploader(
+    "Upload Speaker Bio / CV (PDF) or paste text below",
+    type=["pdf"]
+)
+
+bio_text = ""
+if bio_file:
+    bio_text = extract_text_from_pdf(bio_file)
+
+bio_text = st.text_area(
+    "Bio Text",
+    value=bio_text,
+    height=200
+)
+
+suggested_category, rationale = assess_seniority(bio_text) if bio_text else (
+    "Senior Specialist", "No bio provided"
+)
+
+st.info(f"Suggested category: **{suggested_category}**")
+st.caption(f"Rationale: {rationale}")
+
+category = st.selectbox(
+    "Professional Category (confirm or override)",
+    options=list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(suggested_category)
+)
+
+labor_value = calculate_labor(category, presentation_hours)
 st.markdown(f"**Labor Contribution:** ${labor_value:,.2f}")
 
-st.markdown("### Travel")
+# =========================================================
+# C. TRAVEL (MANUAL PER DIEM ENTRY)
+# =========================================================
+st.subheader("C. Travel Valuation")
 
-airfare = st.number_input("Airfare (USD)", min_value=0.0)
-lodging_rate = st.number_input("Lodging Rate per Night", min_value=0.0)
-mie_rate = st.number_input("M&IE Rate per Day", min_value=0.0)
+travel_start = st.date_input("Travel Start Date")
+travel_end = st.date_input("Travel End Date")
 
-col1, col2 = st.columns(2)
-with col1:
-    travel_start = st.date_input("Travel Start Date")
-with col2:
-    travel_end = st.date_input("Travel End Date")
+airfare = st.number_input("Estimated Round-Trip Airfare (USD)", min_value=0.0)
+
+lodging_rate = st.number_input(
+    "DOS Lodging Rate per Night (USD)",
+    min_value=0.0,
+    help="Enter rate from DOS or GSA per diem tables."
+)
+
+mie_rate = st.number_input(
+    "DOS M&IE Rate per Day (USD)",
+    min_value=0.0,
+    help="Enter rate from DOS or GSA per diem tables."
+)
 
 workshops_on_trip = st.number_input(
     "Number of US APEC–RISE Workshops on This Trip",
@@ -211,44 +210,63 @@ workshops_on_trip = st.number_input(
     step=1
 )
 
-travel_value = calculate_travel(
-    airfare, lodging_rate, mie_rate,
-    travel_start, travel_end,
+travel = calculate_travel(
+    airfare,
+    lodging_rate,
+    mie_rate,
+    travel_start,
+    travel_end,
     workshops_on_trip
 )
 
-st.markdown(f"**Allocated Travel Contribution:** ${travel_value:,.2f}")
-
-total_ot5 = round(labor_value + travel_value, 2)
-
-st.divider()
+st.markdown(f"**Allocated Travel Contribution:** ${travel['allocated_travel']:,.2f}")
 
 # =========================================================
-# D. REVIEW & SUBMIT
+# D. CONTRIBUTION DETAILS (MANUAL CLASSIFICATION)
 # =========================================================
-st.subheader("D. Review & Submit")
+st.subheader("D. Contribution Details")
+
+firm_name = st.text_input("Firm Name")
+host_economy = st.text_input("Host Economy (Workshop Location)")
+resource_origin = st.selectbox(
+    "Resource Origin",
+    ["U.S.-based", "Host Country-based", "Third Country-based"]
+)
+
+resource_type = st.selectbox(
+    "Resource Type",
+    ["In-kind"],
+    index=0
+)
+
+faos = st.multiselect(
+    "U.S. FAOs Addressed",
+    FAO_OPTIONS,
+    default=["Economic Growth (Other)"]
+)
+
+contribution_date = st.date_input("Contribution Date (from agenda)")
+fiscal_year = f"FY {derive_usg_fiscal_year(contribution_date)}"
+
+# =========================================================
+# E. REVIEW
+# =========================================================
+st.subheader("E. Review Summary")
+
+total_ot5 = round(labor_value + travel["allocated_travel"], 2)
 
 st.metric("Total OT5 Contribution (USD)", f"${total_ot5:,.2f}")
+st.markdown(f"**Fiscal Year:** {fiscal_year}")
 
-payload = {
-    "amount": total_ot5,
-    "economy": firm_economy,
-    "workstream": workstream,
-    "U.S. FAOs addressed": faos,
-    "resource type": RESOURCE_TYPE,
-    "resource origin": resource_origin,
-    "firm": firm,
-    "engagement": engagement,
-    "indicator id": INDICATOR_ID,
-    "fiscal year": fiscal_year,
-    "contribution date": contribution_date.isoformat()
-}
+st.markdown("### Valuation Breakdown")
+st.write({
+    "Presentation Hours": presentation_hours,
+    "Labor Value": labor_value,
+    "Allocated Travel Value": travel["allocated_travel"],
+    "Total OT5 Value": total_ot5
+})
 
-st.json(payload)
-
-if st.button("Submit to Airtable"):
-    try:
-        submit_to_airtable(payload)
-        st.success("OT5 record successfully submitted to Airtable.")
-    except Exception as e:
-        st.error(f"Submission failed: {e}")
+st.caption(
+    "Enter the final OT5 amount and supporting documentation "
+    "into the Airtable ‘OT5 Private Sector Resources’ table."
+)
