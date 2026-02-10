@@ -1,6 +1,6 @@
 import streamlit as st
 import re
-from datetime import datetime, date
+from datetime import datetime
 from io import BytesIO
 from PyPDF2 import PdfReader
 
@@ -48,22 +48,27 @@ def extract_text_from_pdf(uploaded_file):
 
 def extract_speaker_hours(agenda_text, speaker_name):
     """
-    Extracts presentation hours ONLY for agenda lines
-    that contain the speaker's name.
+    Extracts presentation hours for sessions where the speaker
+    appears anywhere in the session block (not just the same line).
     """
+    speaker = speaker_name.lower().strip()
     total_hours = 0.0
-    speaker_lower = speaker_name.lower()
 
-    lines = agenda_text.splitlines()
     time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+    matches = list(re.finditer(time_pattern, agenda_text))
 
-    for line in lines:
-        if speaker_lower in line.lower():
-            matches = re.findall(time_pattern, line)
-            for start, end in matches:
-                s = datetime.strptime(start, "%H:%M")
-                e = datetime.strptime(end, "%H:%M")
-                total_hours += (e - s).seconds / 3600
+    for i, match in enumerate(matches):
+        start_time, end_time = match.groups()
+
+        start_idx = match.end()
+        end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
+
+        session_block = agenda_text[start_idx:end_idx].lower()
+
+        if speaker in session_block:
+            s = datetime.strptime(start_time, "%H:%M")
+            e = datetime.strptime(end_time, "%H:%M")
+            total_hours += (e - s).seconds / 3600
 
     return round(total_hours, 2)
 
@@ -140,8 +145,8 @@ if agenda_file:
 agenda_text = st.text_area(
     "Agenda Text",
     value=agenda_text,
-    height=220,
-    help="Agenda lines must include speaker name and session time (e.g., 10:00–11:00 Jane Smith)."
+    height=240,
+    help="Agenda should list session times, with speakers listed below each session."
 )
 
 auto_hours = 0.0
