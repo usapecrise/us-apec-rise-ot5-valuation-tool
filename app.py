@@ -130,9 +130,8 @@ st.divider()
 # DROPDOWN DATA
 # =========================================================
 economy_options = fetch_airtable_options("Economy Reference List")
-workstream_options = fetch_airtable_options("Workstreams")
-firm_options = fetch_airtable_options("Firms")
-engagement_options = fetch_airtable_options("Engagements")
+workstream_options = fetch_airtable_options("Workstream Reference List")
+engagement_options = fetch_airtable_options("Workshop Reference List")
 
 # =========================================================
 # A. ELIGIBILITY
