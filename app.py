@@ -46,10 +46,31 @@ def extract_text_from_pdf(uploaded_file):
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
+def extract_person_agenda_block(agenda_text, speaker_name):
+    """
+    Returns the agenda block associated with the speaker.
+    """
+    speaker = speaker_name.lower().strip()
+
+    time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+    matches = list(re.finditer(time_pattern, agenda_text))
+
+    for i, match in enumerate(matches):
+        start_idx = match.end()
+        end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
+
+        block = agenda_text[start_idx:end_idx]
+
+        if speaker in block.lower():
+            return block
+
+    return ""
+
+
 def extract_speaker_hours(agenda_text, speaker_name):
     """
     Extracts presentation hours for sessions where the speaker
-    appears anywhere in the session block (APEC-style agendas).
+    appears anywhere in the session block.
     """
     speaker = speaker_name.lower().strip()
     total_hours = 0.0
@@ -74,10 +95,6 @@ def extract_speaker_hours(agenda_text, speaker_name):
 
 
 def extract_person_bio_section(bio_text, speaker_name, window_lines=5):
-    """
-    Extracts only the portion of the bio text associated with
-    the specified speaker.
-    """
     lines = bio_text.splitlines()
     speaker_lower = speaker_name.lower()
 
@@ -90,29 +107,21 @@ def extract_person_bio_section(bio_text, speaker_name, window_lines=5):
     return ""
 
 
-def assess_seniority(bio_text, speaker_name):
+def assess_seniority_from_text(text):
     """
-    Assesses seniority using ONLY the bio section
-    associated with the specified speaker.
+    Conservative seniority assessment from provided text block.
     """
-    person_section = extract_person_bio_section(bio_text, speaker_name)
+    t = text.lower()
 
-    if not person_section:
-        return "Senior Specialist", "Speaker name not found in bio text; defaulted conservatively"
-
-    text = person_section.lower()
-
-    # Downgrade / ambiguity signals
     downgrade_terms = [
         "former", "previously", "ex-", "advisor", "board",
         "consultant", "principal", "co-founder", "founder"
     ]
 
     for term in downgrade_terms:
-        if term in text:
-            return "Senior Specialist", f"Downgrade term detected in personal bio section: '{term}'"
+        if term in t:
+            return "Senior Specialist", f"Downgrade term detected: '{term}'"
 
-    # Strong current-role executive signals
     exec_patterns = [
         r"\bceo\b",
         r"\bchief .* officer\b",
@@ -126,10 +135,10 @@ def assess_seniority(bio_text, speaker_name):
     ]
 
     for pattern in exec_patterns:
-        if re.search(pattern, text):
-            return "Executive / Senior Leadership", f"Current-role pattern detected in personal bio section: '{pattern}'"
+        if re.search(pattern, t):
+            return "Executive / Senior Leadership", f"Current-role pattern detected: '{pattern}'"
 
-    return "Senior Specialist", "No current executive role detected in personal bio section"
+    return "Senior Specialist", "No current executive role detected"
 
 
 def calculate_labor(category, presentation_hours):
@@ -188,13 +197,15 @@ if agenda_file:
 agenda_text = st.text_area(
     "Agenda Text",
     value=agenda_text,
-    height=240,
-    help="Agenda should list session times, with speakers listed below each session."
+    height=260
 )
 
 auto_hours = 0.0
+agenda_block = ""
+
 if speaker_name and agenda_text:
     auto_hours = extract_speaker_hours(agenda_text, speaker_name)
+    agenda_block = extract_person_agenda_block(agenda_text, speaker_name)
 
 presentation_hours = st.number_input(
     "Presentation Hours (auto-detected; override if needed)",
@@ -209,9 +220,9 @@ if speaker_name and agenda_text and auto_hours == 0:
     )
 
 # =========================================================
-# B. BIO & SENIORITY
+# B. SENIORITY (AGENDA FIRST, BIO FALLBACK)
 # =========================================================
-st.subheader("B. Bio & Seniority Assessment")
+st.subheader("B. Seniority Assessment")
 
 bio_file = st.file_uploader(
     "Upload Speaker Bio / CV (PDF) or paste text below",
@@ -223,15 +234,21 @@ if bio_file:
     bio_text = extract_text_from_pdf(bio_file)
 
 bio_text = st.text_area(
-    "Bio Text",
+    "Bio Text (used only if agenda does not specify title)",
     value=bio_text,
-    height=200
+    height=180
 )
 
-suggested_category, rationale = assess_seniority(bio_text, speaker_name)
+if agenda_block:
+    suggested_category, rationale = assess_seniority_from_text(agenda_block)
+    rationale = f"Agenda-based assessment: {rationale}"
+else:
+    person_bio = extract_person_bio_section(bio_text, speaker_name)
+    suggested_category, rationale = assess_seniority_from_text(person_bio)
+    rationale = f"Bio-based assessment: {rationale}"
 
 st.info(f"Suggested category: **{suggested_category}**")
-st.caption(f"Rationale: {rationale}")
+st.caption(rationale)
 st.caption("Final category determination rests with staff judgment.")
 
 category = st.selectbox(
@@ -253,15 +270,8 @@ travel_end = st.date_input("Travel End Date")
 
 airfare = st.number_input("Estimated Round-Trip Airfare (USD)", min_value=0.0)
 
-lodging_rate = st.number_input(
-    "DOS Lodging Rate per Night (USD)",
-    min_value=0.0
-)
-
-mie_rate = st.number_input(
-    "DOS M&IE Rate per Day (USD)",
-    min_value=0.0
-)
+lodging_rate = st.number_input("DOS Lodging Rate per Night (USD)", min_value=0.0)
+mie_rate = st.number_input("DOS M&IE Rate per Day (USD)", min_value=0.0)
 
 workshops_on_trip = st.number_input(
     "Number of US APEC–RISE Workshops on This Trip",
@@ -283,7 +293,7 @@ st.markdown(f"**Allocated Travel Contribution:** ${travel['allocated_travel']:,.
 # =========================================================
 # D. MANUAL CLASSIFICATION
 # =========================================================
-st.subheader("D. Contribution Details (Manual)")
+st.subheader("D. Contribution Details (Manual Entry)")
 
 firm_name = st.text_input("Firm Name")
 host_economy = st.text_input("Host Economy (Workshop Location)")
@@ -326,4 +336,3 @@ st.caption(
     "Enter the final OT5 amount and supporting documentation "
     "into the Airtable ‘OT5 Private Sector Resources’ table."
 )
-
