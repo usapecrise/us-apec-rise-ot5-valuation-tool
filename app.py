@@ -12,7 +12,7 @@ st.title("OT5 / PSE-4 Private Sector Valuation Tool")
 st.caption("Implements standardized OT5 methodology (labor + travel valuation)")
 
 # =========================================================
-# CONSTANTS
+# CONSTANTS (FIXED FOR PROJECT LIFE)
 # =========================================================
 HOURLY_RATES = {
     "Executive / Senior Leadership": 149,
@@ -49,7 +49,7 @@ def extract_text_from_pdf(uploaded_file):
 def extract_speaker_hours(agenda_text, speaker_name):
     """
     Extracts presentation hours for sessions where the speaker
-    appears anywhere in the session block (not just the same line).
+    appears anywhere in the session block (APEC-style agendas).
     """
     speaker = speaker_name.lower().strip()
     total_hours = 0.0
@@ -73,19 +73,63 @@ def extract_speaker_hours(agenda_text, speaker_name):
     return round(total_hours, 2)
 
 
-def assess_seniority(bio_text):
-    executive_keywords = [
-        "ceo", "coo", "cfo", "president", "vice president", "vp",
-        "managing director", "partner", "country director",
-        "regional director", "chief", "head of"
+def extract_person_bio_section(bio_text, speaker_name, window_lines=5):
+    """
+    Extracts only the portion of the bio text associated with
+    the specified speaker.
+    """
+    lines = bio_text.splitlines()
+    speaker_lower = speaker_name.lower()
+
+    for i, line in enumerate(lines):
+        if speaker_lower in line.lower():
+            start = max(i - window_lines, 0)
+            end = min(i + window_lines + 1, len(lines))
+            return " ".join(lines[start:end])
+
+    return ""
+
+
+def assess_seniority(bio_text, speaker_name):
+    """
+    Assesses seniority using ONLY the bio section
+    associated with the specified speaker.
+    """
+    person_section = extract_person_bio_section(bio_text, speaker_name)
+
+    if not person_section:
+        return "Senior Specialist", "Speaker name not found in bio text; defaulted conservatively"
+
+    text = person_section.lower()
+
+    # Downgrade / ambiguity signals
+    downgrade_terms = [
+        "former", "previously", "ex-", "advisor", "board",
+        "consultant", "principal", "co-founder", "founder"
     ]
 
-    text = bio_text.lower()
-    for kw in executive_keywords:
-        if kw in text:
-            return "Executive / Senior Leadership", f"Detected keyword: '{kw}'"
+    for term in downgrade_terms:
+        if term in text:
+            return "Senior Specialist", f"Downgrade term detected in personal bio section: '{term}'"
 
-    return "Senior Specialist", "No executive-level keywords detected"
+    # Strong current-role executive signals
+    exec_patterns = [
+        r"\bceo\b",
+        r"\bchief .* officer\b",
+        r"\bvice president\b",
+        r"\bvp\b",
+        r"\bmanaging director\b",
+        r"\bcountry director\b",
+        r"\bregional director\b",
+        r"\bhead of\b",
+        r"\bpresident\b"
+    ]
+
+    for pattern in exec_patterns:
+        if re.search(pattern, text):
+            return "Executive / Senior Leadership", f"Current-role pattern detected in personal bio section: '{pattern}'"
+
+    return "Senior Specialist", "No current executive role detected in personal bio section"
 
 
 def calculate_labor(category, presentation_hours):
@@ -118,7 +162,6 @@ def calculate_travel(
         "lodging_cost": round(lodging_cost, 2),
         "mie_travel_days": round(mie_travel_days, 2),
         "mie_full_days": round(mie_full_days, 2),
-        "total_travel": round(total_travel, 2),
         "allocated_travel": round(allocated_travel, 2)
     }
 
@@ -185,12 +228,11 @@ bio_text = st.text_area(
     height=200
 )
 
-suggested_category, rationale = assess_seniority(bio_text) if bio_text else (
-    "Senior Specialist", "No bio provided"
-)
+suggested_category, rationale = assess_seniority(bio_text, speaker_name)
 
 st.info(f"Suggested category: **{suggested_category}**")
 st.caption(f"Rationale: {rationale}")
+st.caption("Final category determination rests with staff judgment.")
 
 category = st.selectbox(
     "Professional Category (confirm or override)",
@@ -241,7 +283,7 @@ st.markdown(f"**Allocated Travel Contribution:** ${travel['allocated_travel']:,.
 # =========================================================
 # D. MANUAL CLASSIFICATION
 # =========================================================
-st.subheader("D. Contribution Details")
+st.subheader("D. Contribution Details (Manual)")
 
 firm_name = st.text_input("Firm Name")
 host_economy = st.text_input("Host Economy (Workshop Location)")
@@ -284,3 +326,4 @@ st.caption(
     "Enter the final OT5 amount and supporting documentation "
     "into the Airtable ‘OT5 Private Sector Resources’ table."
 )
+
