@@ -1,5 +1,23 @@
+# =========================================================
+# APPLICATION METADATA
+# =========================================================
 APP_VERSION = "v1.0.0"
 METHODOLOGY_DOC = "docs/ot5_methodology.md"
+
+# =========================================================
+# STREAMLIT CONFIG
+# =========================================================
+st.set_page_config(
+    page_title="OT5 / PSE-4 Valuation Tool",
+    layout="centered"
+)
+
+st.title("OT5 / PSE-4 Private Sector Valuation Tool")
+st.caption(
+    f"OT5 Valuation Tool {APP_VERSION} — implements {METHODOLOGY_DOC}"
+)
+
+st.divider()
 
 import streamlit as st
 from datetime import date
