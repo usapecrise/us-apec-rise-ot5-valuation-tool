@@ -9,7 +9,7 @@ from PyPDF2 import PdfReader
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption("Implements standardized OT5 methodology (labor + travel valuation)")
+st.caption("Labor category and hours derived from official workshop agenda")
 
 # =========================================================
 # CONSTANTS (FIXED FOR PROJECT LIFE)
@@ -20,8 +20,8 @@ HOURLY_RATES = {
 }
 
 LABOR_MULTIPLIER = 3.5          # 1x presentation + 2x prep + 0.5x follow-up
-STANDARD_TRAVEL_DAYS = 2        # Outbound + return
-TRAVEL_DAY_MIE_FACTOR = 0.75    # 75% M&IE on travel days
+STANDARD_TRAVEL_DAYS = 2
+TRAVEL_DAY_MIE_FACTOR = 0.75
 
 FAO_OPTIONS = [
     "Peace and Security",
@@ -47,18 +47,13 @@ def extract_text_from_pdf(uploaded_file):
 
 
 def extract_person_agenda_block(agenda_text, speaker_name):
-    """
-    Returns the agenda block associated with the speaker.
-    """
     speaker = speaker_name.lower().strip()
-
     time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
     matches = list(re.finditer(time_pattern, agenda_text))
 
     for i, match in enumerate(matches):
         start_idx = match.end()
         end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
-
         block = agenda_text[start_idx:end_idx]
 
         if speaker in block.lower():
@@ -68,10 +63,6 @@ def extract_person_agenda_block(agenda_text, speaker_name):
 
 
 def extract_speaker_hours(agenda_text, speaker_name):
-    """
-    Extracts presentation hours for sessions where the speaker
-    appears anywhere in the session block.
-    """
     speaker = speaker_name.lower().strip()
     total_hours = 0.0
 
@@ -80,10 +71,8 @@ def extract_speaker_hours(agenda_text, speaker_name):
 
     for i, match in enumerate(matches):
         start_time, end_time = match.groups()
-
         start_idx = match.end()
         end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
-
         session_block = agenda_text[start_idx:end_idx].lower()
 
         if speaker in session_block:
@@ -94,51 +83,44 @@ def extract_speaker_hours(agenda_text, speaker_name):
     return round(total_hours, 2)
 
 
-def extract_person_bio_section(bio_text, speaker_name, window_lines=5):
-    lines = bio_text.splitlines()
-    speaker_lower = speaker_name.lower()
-
-    for i, line in enumerate(lines):
-        if speaker_lower in line.lower():
-            start = max(i - window_lines, 0)
-            end = min(i + window_lines + 1, len(lines))
-            return " ".join(lines[start:end])
-
-    return ""
-
-
-def assess_seniority_from_text(text):
+def assess_seniority_from_agenda(agenda_block):
     """
-    Conservative seniority assessment from provided text block.
+    Assigns labor category based solely on agenda-listed current role titles.
     """
-    t = text.lower()
+    t = agenda_block.lower()
 
-    downgrade_terms = [
-        "former", "previously", "ex-", "advisor", "board",
-        "consultant", "principal", "co-founder", "founder"
-    ]
-
-    for term in downgrade_terms:
-        if term in t:
-            return "Senior Specialist", f"Downgrade term detected: '{term}'"
-
-    exec_patterns = [
+    executive_title_patterns = [
         r"\bceo\b",
+        r"\bcoo\b",
+        r"\bcfo\b",
         r"\bchief .* officer\b",
+        r"\bpresident\b",
         r"\bvice president\b",
         r"\bvp\b",
         r"\bmanaging director\b",
+        r"\bpartner\b",
+        r"\bsenior partner\b",
+        r"\bprincipal\b",
+        r"\bfounder\b",
+        r"\bco[- ]?founder\b",
         r"\bcountry director\b",
         r"\bregional director\b",
-        r"\bhead of\b",
-        r"\bpresident\b"
+        r"\bgeneral manager\b",
+        r"\bdepartment head\b",
+        r"\bhead of\b"
     ]
 
-    for pattern in exec_patterns:
+    for pattern in executive_title_patterns:
         if re.search(pattern, t):
-            return "Executive / Senior Leadership", f"Current-role pattern detected: '{pattern}'"
+            return (
+                "Executive / Senior Leadership",
+                f"Agenda-listed title matched pattern: '{pattern}'"
+            )
 
-    return "Senior Specialist", "No current executive role detected"
+    return (
+        "Senior Specialist",
+        "Agenda-listed title does not meet Executive / Senior Leadership criteria"
+    )
 
 
 def calculate_labor(category, presentation_hours):
@@ -165,14 +147,7 @@ def calculate_travel(
     total_travel = airfare + lodging_cost + mie_travel_days + mie_full_days
     allocated_travel = total_travel / workshops_on_trip
 
-    return {
-        "days": days,
-        "nights": nights,
-        "lodging_cost": round(lodging_cost, 2),
-        "mie_travel_days": round(mie_travel_days, 2),
-        "mie_full_days": round(mie_full_days, 2),
-        "allocated_travel": round(allocated_travel, 2)
-    }
+    return round(allocated_travel, 2)
 
 
 def derive_usg_fiscal_year(d):
@@ -185,74 +160,50 @@ st.subheader("A. Speaker & Agenda")
 
 speaker_name = st.text_input("Speaker Name")
 
-agenda_file = st.file_uploader(
-    "Upload Agenda (PDF) or paste agenda text below",
-    type=["pdf"]
-)
+agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
 
 agenda_text = ""
 if agenda_file:
     agenda_text = extract_text_from_pdf(agenda_file)
 
-agenda_text = st.text_area(
-    "Agenda Text",
-    value=agenda_text,
-    height=260
-)
+agenda_text = st.text_area("Agenda Text", value=agenda_text, height=260)
 
-auto_hours = 0.0
 agenda_block = ""
+presentation_hours = 0.0
 
 if speaker_name and agenda_text:
-    auto_hours = extract_speaker_hours(agenda_text, speaker_name)
     agenda_block = extract_person_agenda_block(agenda_text, speaker_name)
+    presentation_hours = extract_speaker_hours(agenda_text, speaker_name)
 
 presentation_hours = st.number_input(
     "Presentation Hours (auto-detected; override if needed)",
-    value=auto_hours,
+    value=presentation_hours,
     step=0.25
 )
 
-if speaker_name and agenda_text and auto_hours == 0:
-    st.warning(
-        "No agenda sessions matched this speaker name. "
-        "Check spelling or override presentation hours manually."
-    )
+if speaker_name and agenda_text and presentation_hours == 0:
+    st.warning("Speaker name not matched to agenda sessions. Check spelling or override hours.")
 
 # =========================================================
-# B. SENIORITY (AGENDA FIRST, BIO FALLBACK)
+# B. LABOR CATEGORY (AGENDA ONLY)
 # =========================================================
-st.subheader("B. Seniority Assessment")
-
-bio_file = st.file_uploader(
-    "Upload Speaker Bio / CV (PDF) or paste text below",
-    type=["pdf"]
-)
-
-bio_text = ""
-if bio_file:
-    bio_text = extract_text_from_pdf(bio_file)
-
-bio_text = st.text_area(
-    "Bio Text (used only if agenda does not specify title)",
-    value=bio_text,
-    height=180
-)
+st.subheader("B. Labor Category (Agenda-Based)")
 
 if agenda_block:
-    suggested_category, rationale = assess_seniority_from_text(agenda_block)
-    rationale = f"Agenda-based assessment: {rationale}"
+    suggested_category, rationale = assess_seniority_from_agenda(agenda_block)
 else:
-    person_bio = extract_person_bio_section(bio_text, speaker_name)
-    suggested_category, rationale = assess_seniority_from_text(person_bio)
-    rationale = f"Bio-based assessment: {rationale}"
+    suggested_category = "Senior Specialist"
+    rationale = "No agenda block found for speaker"
 
-st.info(f"Suggested category: **{suggested_category}**")
+st.info(f"Suggested Category: **{suggested_category}**")
 st.caption(rationale)
-st.caption("Final category determination rests with staff judgment.")
+st.caption(
+    "Labor category is determined solely from the speaker’s current role "
+    "as listed in the official workshop agenda. Staff may override if needed."
+)
 
 category = st.selectbox(
-    "Professional Category (confirm or override)",
+    "Confirm or Override Category",
     options=list(HOURLY_RATES.keys()),
     index=list(HOURLY_RATES.keys()).index(suggested_category)
 )
@@ -261,7 +212,7 @@ labor_value = calculate_labor(category, presentation_hours)
 st.markdown(f"**Labor Contribution:** ${labor_value:,.2f}")
 
 # =========================================================
-# C. TRAVEL (MANUAL PER DIEM ENTRY)
+# C. TRAVEL VALUATION
 # =========================================================
 st.subheader("C. Travel Valuation")
 
@@ -269,7 +220,6 @@ travel_start = st.date_input("Travel Start Date")
 travel_end = st.date_input("Travel End Date")
 
 airfare = st.number_input("Estimated Round-Trip Airfare (USD)", min_value=0.0)
-
 lodging_rate = st.number_input("DOS Lodging Rate per Night (USD)", min_value=0.0)
 mie_rate = st.number_input("DOS M&IE Rate per Day (USD)", min_value=0.0)
 
@@ -279,7 +229,7 @@ workshops_on_trip = st.number_input(
     step=1
 )
 
-travel = calculate_travel(
+travel_value = calculate_travel(
     airfare,
     lodging_rate,
     mie_rate,
@@ -288,15 +238,15 @@ travel = calculate_travel(
     workshops_on_trip
 )
 
-st.markdown(f"**Allocated Travel Contribution:** ${travel['allocated_travel']:,.2f}")
+st.markdown(f"**Allocated Travel Contribution:** ${travel_value:,.2f}")
 
 # =========================================================
-# D. MANUAL CLASSIFICATION
+# D. MANUAL POLICY FIELDS
 # =========================================================
-st.subheader("D. Contribution Details (Manual Entry)")
+st.subheader("D. Policy Classification (Manual)")
 
 firm_name = st.text_input("Firm Name")
-host_economy = st.text_input("Host Economy (Workshop Location)")
+host_economy = st.text_input("Host Economy")
 
 resource_origin = st.selectbox(
     "Resource Origin",
@@ -311,28 +261,27 @@ faos = st.multiselect(
     default=["Economic Growth (Other)"]
 )
 
-contribution_date = st.date_input("Contribution Date (from agenda)")
+contribution_date = st.date_input("Contribution Date")
 fiscal_year = f"FY {derive_usg_fiscal_year(contribution_date)}"
 
 # =========================================================
-# E. REVIEW
+# E. FINAL REVIEW
 # =========================================================
 st.subheader("E. Review Summary")
 
-total_ot5 = round(labor_value + travel["allocated_travel"], 2)
+total_ot5 = round(labor_value + travel_value, 2)
 
 st.metric("Total OT5 Contribution (USD)", f"${total_ot5:,.2f}")
 st.markdown(f"**Fiscal Year:** {fiscal_year}")
 
-st.markdown("### Valuation Breakdown")
 st.write({
     "Presentation Hours": presentation_hours,
     "Labor Value": labor_value,
-    "Allocated Travel Value": travel["allocated_travel"],
+    "Travel Value": travel_value,
     "Total OT5 Value": total_ot5
 })
 
 st.caption(
-    "Enter the final OT5 amount and supporting documentation "
-    "into the Airtable ‘OT5 Private Sector Resources’ table."
+    "Final values should be entered into the Airtable "
+    "‘OT5 Private Sector Resources’ table as the system of record."
 )
