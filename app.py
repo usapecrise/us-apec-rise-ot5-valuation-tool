@@ -3,6 +3,15 @@ from datetime import date
 from dotenv import load_dotenv
 import os
 
+from valuation.constants import (
+    APP_VERSION,
+    METHODOLOGY_DOC,
+    HOURLY_RATES,
+    TOTAL_LABOR_MULTIPLIER,
+    STANDARD_TRAVEL_DAYS,
+    TRAVEL_DAY_MIE_RATE
+)
+
 # =========================================================
 # ENVIRONMENT SETUP (for future Airtable integration)
 # =========================================================
@@ -11,12 +20,6 @@ load_dotenv()
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
-
-# =========================================================
-# APPLICATION METADATA
-# =========================================================
-APP_VERSION = "v1.0.0"
-METHODOLOGY_DOC = "docs/ot5_methodology.md"
 
 # =========================================================
 # STREAMLIT CONFIG (MUST BE CALLED ONCE)
@@ -33,17 +36,6 @@ st.caption(
 
 st.divider()
 
-# =========================================================
-# POLICY CONSTANTS (FIXED FOR PROJECT LIFE)
-# =========================================================
-HOURLY_RATES = {
-    "Executive / Senior Leadership": 149,
-    "Senior Specialist": 131
-}
-
-TOTAL_LABOR_MULTIPLIER = 3.5        # Prep (2x) + Follow-up (0.5x) + Presentation (1x)
-STANDARD_TRAVEL_DAYS = 2            # Outbound + return
-TRAVEL_DAY_MIE_RATE = 0.75          # 75% M&IE on travel days
 
 # =========================================================
 # CALCULATION FUNCTIONS
