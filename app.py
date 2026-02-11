@@ -15,11 +15,15 @@ st.title("OT5 / PSE-4 Private Sector Valuation Tool")
 st.caption("Agenda-based labor valuation, standardized travel, Airtable submission")
 
 # =========================================================
-# AIRTABLE CONFIG
+# AIRTABLE CONFIG (MATCHES YOUR SECRETS)
 # =========================================================
-AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
+AIRTABLE_TOKEN = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-AIRTABLE_TABLE = os.getenv("AIRTABLE_TABLE_NAME")
+AIRTABLE_TABLE = os.getenv("AIRTABLE_OT5_TABLE")
+
+if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE:
+    st.error("Missing Airtable configuration. Check Streamlit Secrets.")
+    st.stop()
 
 HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -115,7 +119,7 @@ def extract_speaker_hours(text, speaker):
 
     return round(total, 2)
 
-def assess_seniority_from_agenda(block):
+def assess_seniority_from_agenda(text):
     titles = [
         r"\bceo\b", r"\bcoo\b", r"\bcfo\b", r"\bchief .* officer\b",
         r"\bpresident\b", r"\bvice president\b", r"\bvp\b",
@@ -123,7 +127,7 @@ def assess_seniority_from_agenda(block):
         r"\bfounder\b", r"\bco[- ]?founder\b"
     ]
     for t in titles:
-        if re.search(t, block.lower()):
+        if re.search(t, text.lower()):
             return "Executive / Senior Leadership"
     return "Senior Specialist"
 
@@ -144,9 +148,10 @@ def derive_usg_fiscal_year(d):
     return d.year + 1 if d.month >= 10 else d.year
 
 # =========================================================
-# AGENDA
+# A. AGENDA
 # =========================================================
 st.subheader("A. Agenda & Speaker")
+
 speaker_name = st.text_input("Speaker Name")
 agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
 agenda_text = extract_text_from_pdf(agenda_file) if agenda_file else ""
@@ -160,19 +165,24 @@ presentation_hours = st.number_input(
 )
 
 # =========================================================
-# LABOR
+# B. LABOR
 # =========================================================
 st.subheader("B. Labor Valuation")
+
 category = assess_seniority_from_agenda(agenda_text)
-category = st.selectbox("Confirm Category", list(HOURLY_RATES.keys()),
-                        index=list(HOURLY_RATES.keys()).index(category))
+category = st.selectbox(
+    "Confirm Category",
+    list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(category)
+)
 
 labor_hours, labor_value = calculate_labor(category, presentation_hours)
 
 # =========================================================
-# TRAVEL
+# C. TRAVEL
 # =========================================================
 st.subheader("C. Travel Valuation")
+
 trip_type = st.selectbox("Trip Type", list(AIRFARE_BANDS.keys()))
 airfare = AIRFARE_BANDS[trip_type]
 
@@ -189,7 +199,7 @@ travel_value = calculate_travel(
 )
 
 # =========================================================
-# POLICY FIELDS
+# D. POLICY FIELDS
 # =========================================================
 st.subheader("D. Policy Fields")
 
@@ -208,12 +218,13 @@ faos = st.multiselect(
 )
 
 # =========================================================
-# REVIEW
+# E. REVIEW
 # =========================================================
 total_ot5 = round(labor_value + travel_value, 2)
 fiscal_year = f"FY {derive_usg_fiscal_year(date.today())}"
 
 st.subheader("E. Review & Submit")
+
 st.write({
     "Labor Value": labor_value,
     "Travel Value": travel_value,
@@ -222,7 +233,7 @@ st.write({
 })
 
 # =========================================================
-# SUBMIT
+# F. SUBMIT
 # =========================================================
 if st.checkbox("I confirm this OT5 valuation is correct"):
     if st.button("Submit OT5 Record to Airtable"):
@@ -243,7 +254,7 @@ if st.checkbox("I confirm this OT5 valuation is correct"):
 
         r = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
 
-        if r.status_code == 200:
+        if r.status_code in [200, 201]:
             st.success("OT5 record successfully created in Airtable.")
         else:
             st.error("Airtable submission failed.")
