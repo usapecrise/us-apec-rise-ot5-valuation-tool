@@ -1,7 +1,6 @@
 import streamlit as st
 import re
 import requests
-import os
 import urllib.parse
 from datetime import datetime, date
 from io import BytesIO
@@ -15,14 +14,14 @@ st.title("OT5 / PSE-4 Private Sector Valuation Tool")
 st.caption("Agenda-based labor valuation, standardized travel, Airtable submission")
 
 # =========================================================
-# AIRTABLE CONFIG (MATCHES YOUR SECRETS)
+# AIRTABLE CONFIG (STREAMLIT CLOUD SAFE)
 # =========================================================
-AIRTABLE_TOKEN = st.secrets["AIRTABLE_TOKEN"]
-AIRTABLE_BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
-AIRTABLE_TABLE = st.secrets["AIRTABLE_OT5_TABLE"]
-
-if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE:
-    st.error("Missing Airtable configuration. Check Streamlit Secrets.")
+try:
+    AIRTABLE_TOKEN = st.secrets["AIRTABLE_TOKEN"]
+    AIRTABLE_BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
+    AIRTABLE_TABLE = st.secrets["AIRTABLE_OT5_TABLE"]
+except Exception:
+    st.error("Missing Airtable secrets in Streamlit settings.")
     st.stop()
 
 HEADERS = {
@@ -66,7 +65,7 @@ FAO_OPTIONS = [
 ]
 
 # =========================================================
-# LOAD REFERENCE TABLES (CACHED)
+# LOAD REFERENCE TABLES (WITH DEBUG)
 # =========================================================
 @st.cache_data
 def load_reference_table(table_name, primary_field):
@@ -77,11 +76,14 @@ def load_reference_table(table_name, primary_field):
     while True:
         params = {"offset": offset} if offset else {}
         r = requests.get(url, headers=HEADERS, params=params)
-        r.raise_for_status()
-        data = r.json()
 
+        if r.status_code != 200:
+            raise Exception(f"Airtable Error {r.status_code}: {r.text}")
+
+        data = r.json()
         records.extend(data.get("records", []))
         offset = data.get("offset")
+
         if not offset:
             break
 
@@ -91,8 +93,9 @@ def load_reference_table(table_name, primary_field):
         if rec["fields"].get(primary_field)
     }
 
+# ✅ Correct table names
 economy_dict = load_reference_table("Economy Reference List", "Economy")
-firm_dict = load_reference_table("Firm Reference List", "Firm")
+firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
 
 # =========================================================
 # HELPERS
@@ -148,7 +151,7 @@ def derive_usg_fiscal_year(d):
     return d.year + 1 if d.month >= 10 else d.year
 
 # =========================================================
-# A. AGENDA
+# AGENDA
 # =========================================================
 st.subheader("A. Agenda & Speaker")
 
@@ -158,28 +161,21 @@ agenda_text = extract_text_from_pdf(agenda_file) if agenda_file else ""
 agenda_text = st.text_area("Agenda Text", value=agenda_text, height=260)
 
 presentation_hours = extract_speaker_hours(agenda_text, speaker_name)
-presentation_hours = st.number_input(
-    "Presentation Hours",
-    value=presentation_hours,
-    step=0.25
-)
+presentation_hours = st.number_input("Presentation Hours", value=presentation_hours, step=0.25)
 
 # =========================================================
-# B. LABOR
+# LABOR
 # =========================================================
 st.subheader("B. Labor Valuation")
 
 category = assess_seniority_from_agenda(agenda_text)
-category = st.selectbox(
-    "Confirm Category",
-    list(HOURLY_RATES.keys()),
-    index=list(HOURLY_RATES.keys()).index(category)
-)
+category = st.selectbox("Confirm Category", list(HOURLY_RATES.keys()),
+                        index=list(HOURLY_RATES.keys()).index(category))
 
 labor_hours, labor_value = calculate_labor(category, presentation_hours)
 
 # =========================================================
-# C. TRAVEL
+# TRAVEL
 # =========================================================
 st.subheader("C. Travel Valuation")
 
@@ -199,7 +195,7 @@ travel_value = calculate_travel(
 )
 
 # =========================================================
-# D. POLICY FIELDS
+# POLICY FIELDS
 # =========================================================
 st.subheader("D. Policy Fields")
 
@@ -211,20 +207,16 @@ resource_origin = st.selectbox(
     ["U.S.-based", "Host Country-based", "Third Country-based"]
 )
 
-faos = st.multiselect(
-    "U.S. FAOs Addressed",
-    FAO_OPTIONS,
-    default=["Economic Growth (Other)"]
-)
+faos = st.multiselect("U.S. FAOs Addressed", FAO_OPTIONS,
+                      default=["Economic Growth (Other)"])
 
 # =========================================================
-# E. REVIEW
+# REVIEW
 # =========================================================
 total_ot5 = round(labor_value + travel_value, 2)
 fiscal_year = f"FY {derive_usg_fiscal_year(date.today())}"
 
 st.subheader("E. Review & Submit")
-
 st.write({
     "Labor Value": labor_value,
     "Travel Value": travel_value,
@@ -233,7 +225,7 @@ st.write({
 })
 
 # =========================================================
-# F. SUBMIT
+# SUBMIT
 # =========================================================
 if st.checkbox("I confirm this OT5 valuation is correct"):
     if st.button("Submit OT5 Record to Airtable"):
@@ -257,5 +249,5 @@ if st.checkbox("I confirm this OT5 valuation is correct"):
         if r.status_code in [200, 201]:
             st.success("OT5 record successfully created in Airtable.")
         else:
-            st.error("Airtable submission failed.")
+            st.error(f"Airtable submission failed ({r.status_code})")
             st.json(r.json())
