@@ -231,8 +231,11 @@ resource_origin = st.selectbox(
     ["U.S.-based", "Host Country-based", "Third Country-based"]
 )
 
-faos = st.multiselect("U.S. FAOs Addressed", FAO_OPTIONS,
-                      default=["Economic Growth (Other)"])
+fao = st.selectbox(
+    "U.S. FAOs Addressed",
+    FAO_OPTIONS,
+    index=FAO_OPTIONS.index("Economic Growth (Other)")
+)
 
 # =========================================================
 # REVIEW
