@@ -266,7 +266,7 @@ if st.checkbox("I confirm this OT5 valuation is correct"):
                 "Fiscal Year": fiscal_year,
                 "Resource Type": "In-kind",
                 "Resource Origin": resource_origin,
-                "U.S. FAOs Addressed": faos,
+                "U.S. FAOs Addressed": fao,
                 "Economy": [economy_dict[host_economy]],
                 "Firm": [firm_dict[firm_name]]
             }
