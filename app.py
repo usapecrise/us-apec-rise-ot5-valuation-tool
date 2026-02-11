@@ -1,6 +1,6 @@
 import streamlit as st
 import re
-from datetime import datetime
+from datetime import datetime, date
 from io import BytesIO
 from PyPDF2 import PdfReader
 
@@ -9,21 +9,20 @@ from PyPDF2 import PdfReader
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption("Labor and travel valuation derived from official workshop agenda and standardized rates")
+st.caption("Labor, travel, and contribution date derived from official workshop agenda")
 
 # =========================================================
-# CONSTANTS (FIXED FOR PROJECT LIFE)
+# CONSTANTS
 # =========================================================
 HOURLY_RATES = {
     "Executive / Senior Leadership": 149,
     "Senior Specialist": 131
 }
 
-LABOR_MULTIPLIER = 3.5          # 1x presentation + 2x prep + 0.5x follow-up
+LABOR_MULTIPLIER = 3.5
 STANDARD_TRAVEL_DAYS = 2
 TRAVEL_DAY_MIE_FACTOR = 0.75
 
-# Standardized airfare bands (USD)
 AIRFARE_BANDS = {
     "Domestic (same economy)": 550,
     "Regional (same region)": 700,
@@ -59,99 +58,93 @@ def extract_person_agenda_block(agenda_text, speaker_name):
     matches = list(re.finditer(time_pattern, agenda_text))
 
     for i, match in enumerate(matches):
-        start_idx = match.end()
-        end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
-        block = agenda_text[start_idx:end_idx]
-
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
+        block = agenda_text[start:end]
         if speaker in block.lower():
             return block
-
     return ""
 
 
 def extract_speaker_hours(agenda_text, speaker_name):
     speaker = speaker_name.lower().strip()
-    total_hours = 0.0
-
+    total = 0.0
     time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
     matches = list(re.finditer(time_pattern, agenda_text))
 
     for i, match in enumerate(matches):
         start_time, end_time = match.groups()
-        start_idx = match.end()
-        end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
-        session_block = agenda_text[start_idx:end_idx].lower()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(agenda_text)
+        block = agenda_text[start:end].lower()
 
-        if speaker in session_block:
+        if speaker in block:
             s = datetime.strptime(start_time, "%H:%M")
             e = datetime.strptime(end_time, "%H:%M")
-            total_hours += (e - s).seconds / 3600
+            total += (e - s).seconds / 3600
 
-    return round(total_hours, 2)
+    return round(total, 2)
 
 
 def assess_seniority_from_agenda(agenda_block):
     t = agenda_block.lower()
 
-    executive_title_patterns = [
-        r"\bceo\b",
-        r"\bcoo\b",
-        r"\bcfo\b",
-        r"\bchief .* officer\b",
-        r"\bpresident\b",
-        r"\bvice president\b",
-        r"\bvp\b",
-        r"\bmanaging director\b",
-        r"\bpartner\b",
-        r"\bsenior partner\b",
-        r"\bprincipal\b",
-        r"\bfounder\b",
-        r"\bco[- ]?founder\b",
-        r"\bcountry director\b",
-        r"\bregional director\b",
-        r"\bgeneral manager\b",
-        r"\bdepartment head\b",
-        r"\bhead of\b"
+    executive_titles = [
+        r"\bceo\b", r"\bcoo\b", r"\bcfo\b", r"\bchief .* officer\b",
+        r"\bpresident\b", r"\bvice president\b", r"\bvp\b",
+        r"\bmanaging director\b", r"\bpartner\b", r"\bsenior partner\b",
+        r"\bprincipal\b", r"\bfounder\b", r"\bco[- ]?founder\b",
+        r"\bcountry director\b", r"\bregional director\b",
+        r"\bgeneral manager\b", r"\bdepartment head\b", r"\bhead of\b"
     ]
 
-    for pattern in executive_title_patterns:
-        if re.search(pattern, t):
-            return (
-                "Executive / Senior Leadership",
-                f"Agenda-listed title matched: '{pattern}'"
-            )
+    for p in executive_titles:
+        if re.search(p, t):
+            return "Executive / Senior Leadership", f"Matched agenda title pattern: {p}"
 
-    return (
-        "Senior Specialist",
-        "Agenda-listed title does not meet Executive / Senior Leadership criteria"
-    )
+    return "Senior Specialist", "No executive-level title detected in agenda"
 
 
-def calculate_labor(category, presentation_hours):
-    return round(
-        HOURLY_RATES[category] * presentation_hours * LABOR_MULTIPLIER, 2
-    )
+def extract_contribution_date(agenda_text):
+    """
+    Extracts the FIRST date mentioned in the agenda.
+    Used as contribution date for multi-day workshops.
+    """
+    date_patterns = [
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}",
+        r"\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}"
+    ]
+
+    for pattern in date_patterns:
+        match = re.search(pattern, agenda_text)
+        if match:
+            return datetime.strptime(match.group(), "%B %d, %Y").date()
+
+    return None
 
 
-def calculate_travel(
-    airfare,
-    lodging_rate,
-    mie_rate,
-    start_date,
-    end_date,
-    workshops_on_trip
-):
-    days = (end_date - start_date).days + 1
+def calculate_labor(category, hours):
+    total_hours = hours * LABOR_MULTIPLIER
+    return round(total_hours, 2), round(HOURLY_RATES[category] * total_hours, 2)
+
+
+def calculate_travel(airfare, lodging_rate, mie_rate, start, end, workshops):
+    days = (end - start).days + 1
     nights = max(days - 1, 0)
 
-    lodging_cost = lodging_rate * nights
-    mie_travel_days = mie_rate * TRAVEL_DAY_MIE_FACTOR * STANDARD_TRAVEL_DAYS
-    mie_full_days = mie_rate * max(days - STANDARD_TRAVEL_DAYS, 0)
+    lodging = lodging_rate * nights
+    mie_travel = mie_rate * TRAVEL_DAY_MIE_FACTOR * STANDARD_TRAVEL_DAYS
+    mie_full = mie_rate * max(days - STANDARD_TRAVEL_DAYS, 0)
 
-    total_travel = airfare + lodging_cost + mie_travel_days + mie_full_days
-    allocated_travel = total_travel / workshops_on_trip
-
-    return round(allocated_travel, 2)
+    total = airfare + lodging + mie_travel + mie_full
+    return {
+        "days": days,
+        "nights": nights,
+        "lodging": round(lodging, 2),
+        "mie_travel": round(mie_travel, 2),
+        "mie_full": round(mie_full, 2),
+        "allocated": round(total / workshops, 2)
+    }
 
 
 def derive_usg_fiscal_year(d):
@@ -165,19 +158,12 @@ st.subheader("A. Speaker & Agenda")
 speaker_name = st.text_input("Speaker Name")
 
 agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
-
-agenda_text = ""
-if agenda_file:
-    agenda_text = extract_text_from_pdf(agenda_file)
+agenda_text = extract_text_from_pdf(agenda_file) if agenda_file else ""
 
 agenda_text = st.text_area("Agenda Text", value=agenda_text, height=260)
 
-agenda_block = ""
-presentation_hours = 0.0
-
-if speaker_name and agenda_text:
-    agenda_block = extract_person_agenda_block(agenda_text, speaker_name)
-    presentation_hours = extract_speaker_hours(agenda_text, speaker_name)
+agenda_block = extract_person_agenda_block(agenda_text, speaker_name) if speaker_name else ""
+presentation_hours = extract_speaker_hours(agenda_text, speaker_name) if speaker_name else 0.0
 
 presentation_hours = st.number_input(
     "Presentation Hours (auto-detected; override if needed)",
@@ -185,47 +171,30 @@ presentation_hours = st.number_input(
     step=0.25
 )
 
-if speaker_name and agenda_text and presentation_hours == 0:
-    st.warning("Speaker not matched to agenda sessions. Check spelling or override hours.")
-
 # =========================================================
-# B. LABOR CATEGORY (AGENDA-BASED)
+# B. LABOR CATEGORY
 # =========================================================
-st.subheader("B. Labor Category")
+st.subheader("B. Labor Category (Agenda-Based)")
 
-if agenda_block:
-    suggested_category, rationale = assess_seniority_from_agenda(agenda_block)
-else:
-    suggested_category = "Senior Specialist"
-    rationale = "No agenda block found for speaker"
-
-st.info(f"Suggested Category: **{suggested_category}**")
-st.caption(rationale)
+category, category_rationale = assess_seniority_from_agenda(agenda_block)
+st.info(f"Suggested Category: **{category}**")
+st.caption(category_rationale)
 
 category = st.selectbox(
     "Confirm or Override Category",
-    options=list(HOURLY_RATES.keys()),
-    index=list(HOURLY_RATES.keys()).index(suggested_category)
+    list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(category)
 )
 
-labor_value = calculate_labor(category, presentation_hours)
-st.markdown(f"**Labor Contribution:** ${labor_value:,.2f}")
+labor_hours, labor_value = calculate_labor(category, presentation_hours)
 
 # =========================================================
-# C. TRAVEL VALUATION (STANDARDIZED AIRFARE)
+# C. TRAVEL VALUATION
 # =========================================================
 st.subheader("C. Travel Valuation")
 
-home_economy = st.text_input("Speaker Home Economy")
-host_economy = st.text_input("Workshop Host Economy")
-
-trip_type = st.selectbox(
-    "Trip Type (standardized airfare)",
-    options=list(AIRFARE_BANDS.keys())
-)
-
+trip_type = st.selectbox("Trip Type", list(AIRFARE_BANDS.keys()))
 airfare = AIRFARE_BANDS[trip_type]
-st.caption(f"Standardized airfare applied: ${airfare:,.0f}")
 
 travel_start = st.date_input("Travel Start Date")
 travel_end = st.date_input("Travel End Date")
@@ -233,62 +202,56 @@ travel_end = st.date_input("Travel End Date")
 lodging_rate = st.number_input("DOS Lodging Rate per Night (USD)", min_value=0.0)
 mie_rate = st.number_input("DOS M&IE Rate per Day (USD)", min_value=0.0)
 
-workshops_on_trip = st.number_input(
-    "Number of US APEC–RISE Workshops on This Trip",
-    min_value=1,
-    step=1
-)
+workshops_on_trip = st.number_input("Workshops on This Trip", min_value=1, step=1)
 
-travel_value = calculate_travel(
-    airfare,
-    lodging_rate,
-    mie_rate,
-    travel_start,
-    travel_end,
-    workshops_on_trip
+travel = calculate_travel(
+    airfare, lodging_rate, mie_rate,
+    travel_start, travel_end, workshops_on_trip
 )
-
-st.markdown(f"**Allocated Travel Contribution:** ${travel_value:,.2f}")
 
 # =========================================================
-# D. POLICY CLASSIFICATION
+# D. CONTRIBUTION DATE
 # =========================================================
-st.subheader("D. Policy Classification")
+st.subheader("D. Contribution Date")
 
-firm_name = st.text_input("Firm Name")
-
-resource_origin = st.selectbox(
-    "Resource Origin",
-    ["U.S.-based", "Host Country-based", "Third Country-based"]
+auto_contribution_date = extract_contribution_date(agenda_text)
+contribution_date = st.date_input(
+    "Contribution Date (from agenda; override if needed)",
+    value=auto_contribution_date or date.today()
 )
 
-resource_type = st.selectbox("Resource Type", ["In-kind"])
-
-faos = st.multiselect(
-    "U.S. FAOs Addressed",
-    FAO_OPTIONS,
-    default=["Economic Growth (Other)"]
-)
-
-contribution_date = st.date_input("Contribution Date")
 fiscal_year = f"FY {derive_usg_fiscal_year(contribution_date)}"
 
 # =========================================================
-# E. FINAL REVIEW
+# E. BREAKDOWN & REVIEW
 # =========================================================
-st.subheader("E. Review Summary")
+st.subheader("E. Valuation Breakdown")
 
-total_ot5 = round(labor_value + travel_value, 2)
-
-st.metric("Total OT5 Contribution (USD)", f"${total_ot5:,.2f}")
-st.markdown(f"**Fiscal Year:** {fiscal_year}")
-
+st.markdown("### Labor Calculation")
 st.write({
     "Presentation Hours": presentation_hours,
-    "Labor Value": labor_value,
-    "Travel Value": travel_value,
-    "Total OT5 Value": total_ot5
+    "Labor Multiplier": LABOR_MULTIPLIER,
+    "Total Labor Hours": labor_hours,
+    "Hourly Rate": HOURLY_RATES[category],
+    "Labor Value (USD)": labor_value
 })
+
+st.markdown("### Travel Calculation")
+st.write({
+    "Standardized Airfare": airfare,
+    "Lodging Nights": travel["nights"],
+    "Lodging Cost": travel["lodging"],
+    "M&IE (Travel Days)": travel["mie_travel"],
+    "M&IE (Full Days)": travel["mie_full"],
+    "Allocated Travel Value": travel["allocated"]
+})
+
+total_ot5 = round(labor_value + travel["allocated"], 2)
+
+st.markdown("### Final OT5 Value")
+st.metric("Total OT5 Contribution (USD)", f"${total_ot5:,.2f}")
+st.markdown(f"**Contribution Date:** {contribution_date}")
+st.markdown(f"**Fiscal Year:** {fiscal_year}")
 
 st.caption(
     "Final OT5 values should be entered into the Airtable "
