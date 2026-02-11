@@ -7,37 +7,16 @@ from io import BytesIO
 from PyPDF2 import PdfReader
 
 # =========================================================
-# STREAMLIT CONFIG
+# PAGE CONFIG
 # =========================================================
-st.set_page_config(page_title="OT5 In-Kind Contribution Estimation Tool", layout="centered")
-
-st.markdown("""
-    <style>
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        padding-left: 3rem;
-        padding-right: 3rem;
-    }
-    .section-divider {
-        border-top: 1px solid #e6e6e6;
-        margin-top: 2rem;
-        margin-bottom: 2rem;
-    }
-    .review-box {
-        padding: 1.5rem;
-        border-radius: 8px;
-        border: 1px solid #e6e6e6;
-        background-color: #fafafa;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-st.title("OT5 / PSE-4 In-Kind Contribution Estimation Tool")
-st.markdown(
-    "<span style='color:gray;'>Agenda-based estimation of private sector labor and travel contributions</span>",
-    unsafe_allow_html=True
+st.set_page_config(
+    page_title="OT5 Private Sector Valuation",
+    layout="centered",
+    initial_sidebar_state="collapsed"
 )
+
+st.title("OT5 / PSE-4 Private Sector Valuation Tool")
+st.caption("Agenda-based labor valuation · Standardized travel · Structured Airtable submission")
 
 # =========================================================
 # AIRTABLE CONFIG
@@ -47,7 +26,7 @@ try:
     AIRTABLE_BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
     AIRTABLE_TABLE = st.secrets["AIRTABLE_OT5_TABLE"]
 except Exception:
-    st.error("Missing Airtable secrets.")
+    st.error("Airtable secrets not configured.")
     st.stop()
 
 HEADERS = {
@@ -91,7 +70,7 @@ FAO_OPTIONS = [
 ]
 
 # =========================================================
-# LOAD LINKED TABLES
+# REFERENCE TABLE LOADER
 # =========================================================
 @st.cache_data
 def load_reference_table(table_name, primary_field):
@@ -122,7 +101,7 @@ def load_reference_table(table_name, primary_field):
 economy_dict = load_reference_table("Economy Reference List", "Economy")
 firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
 workstream_dict = load_reference_table("Workstream Reference List", "Workstream")
-engagement_dict = load_reference_table("Workshop Reference List", "Workshop")  # ✅ FIXED
+engagement_dict = load_reference_table("Workshop Reference List", "Workshop")
 
 # =========================================================
 # HELPERS
@@ -132,34 +111,37 @@ def extract_text_from_pdf(uploaded_file):
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 def extract_speaker_hours(text, speaker):
+    if not speaker:
+        return 0.0
+
     speaker = speaker.lower()
     total = 0.0
-
-    time_pattern = r"(\d{1,2}:\d{2})(?:\s*(am|pm))?\s*[–\-]\s*(\d{1,2}:\d{2})(?:\s*(am|pm))?"
-    matches = list(re.finditer(time_pattern, text, re.IGNORECASE))
+    time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+    matches = list(re.finditer(time_pattern, text))
 
     for i, m in enumerate(matches):
-        start_time, start_ampm, end_time, end_ampm = m.groups()
-
-        if not start_ampm and end_ampm:
-            start_ampm = end_ampm
-        if not start_ampm:
-            start_ampm = "am"
-        if not end_ampm:
-            end_ampm = start_ampm
-
-        start_index = m.start()
-        end_index = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        block = text[start_index:end_index].lower()
+        start_t, end_t = m.groups()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start:end].lower()
 
         if speaker in block:
-            s = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
-            e = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
-            if e < s:
-                e = e.replace(hour=e.hour + 12)
+            s = datetime.strptime(start_t, "%H:%M")
+            e = datetime.strptime(end_t, "%H:%M")
             total += (e - s).seconds / 3600
 
     return round(total, 2)
+
+def assess_seniority_from_agenda(text):
+    titles = [
+        r"\bceo\b", r"\bpresident\b", r"\bvice president\b",
+        r"\bmanaging director\b", r"\bprincipal\b",
+        r"\bfounder\b", r"\bco[- ]?founder\b"
+    ]
+    for t in titles:
+        if re.search(t, text.lower()):
+            return "Executive / Senior Leadership"
+    return "Senior Specialist"
 
 def calculate_labor(category, hours):
     total_hours = round(hours * LABOR_MULTIPLIER, 2)
@@ -168,63 +150,70 @@ def calculate_labor(category, hours):
 def calculate_travel(airfare, lodging_rate, mie_rate, start, end, workshops):
     days = (end - start).days + 1
     nights = max(days - 1, 0)
+
     lodging = lodging_rate * nights
     mie_travel = mie_rate * TRAVEL_DAY_MIE_FACTOR * STANDARD_TRAVEL_DAYS
     mie_full = mie_rate * max(days - STANDARD_TRAVEL_DAYS, 0)
+
     total = airfare + lodging + mie_travel + mie_full
     return round(total / workshops, 2)
 
 def derive_usg_fiscal_year(d):
-    return d.year + 1 if d.month >= 10 else d.year
+    fy = d.year + 1 if d.month >= 10 else d.year
+    return f"FY{str(fy)[-2:]}"  # FY26 format
 
 # =========================================================
-# A. EVENT DOCUMENTATION & CONTRIBUTOR
+# SECTION A: AGENDA & SPEAKER
 # =========================================================
-st.subheader("A. Event Documentation & Contributor")
+st.divider()
+st.header("A. Agenda & Speaker Information")
 
-contributor_name = st.text_input("Private Sector Contributor")
+speaker_name = st.text_input("Speaker Name")
 
 agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
 agenda_text = extract_text_from_pdf(agenda_file) if agenda_file else ""
-agenda_text = st.text_area("Agenda Text", value=agenda_text, height=260)
+agenda_text = st.text_area("Agenda Text (editable)", value=agenda_text, height=220)
 
-detected_hours = extract_speaker_hours(agenda_text, contributor_name)
-st.info(f"Detected Agenda Participation: {detected_hours} hours")
-
+presentation_hours = extract_speaker_hours(agenda_text, speaker_name)
 presentation_hours = st.number_input(
-    "Adjust Participation Hours (if needed)",
-    value=detected_hours,
+    "Calculated Presentation Hours",
+    value=presentation_hours,
     step=0.25
 )
 
 # =========================================================
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
+# SECTION B: LABOR
 # =========================================================
-# B. ESTIMATED IN-KIND LABOR CONTRIBUTION
-# =========================================================
-st.subheader("B. Estimated In-Kind Labor Contribution")
+st.divider()
+st.header("B. Labor Contribution")
 
-category = st.selectbox("Contributor Category", list(HOURLY_RATES.keys()))
+category_guess = assess_seniority_from_agenda(agenda_text)
+category = st.selectbox(
+    "Seniority Category",
+    list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(category_guess)
+)
+
 labor_hours, labor_value = calculate_labor(category, presentation_hours)
 
 # =========================================================
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
+# SECTION C: TRAVEL
 # =========================================================
-# C. ESTIMATED IN-KIND TRAVEL CONTRIBUTION
-# =========================================================
-st.subheader("C. Estimated In-Kind Travel Contribution")
+st.divider()
+st.header("C. Travel Contribution")
 
 trip_type = st.selectbox("Trip Type", list(AIRFARE_BANDS.keys()))
 airfare = AIRFARE_BANDS[trip_type]
 
-travel_start = st.date_input("Travel Start Date")
-travel_end = st.date_input("Travel End Date")
+col1, col2 = st.columns(2)
+with col1:
+    travel_start = st.date_input("Travel Start Date")
+with col2:
+    travel_end = st.date_input("Travel End Date")
 
 lodging_rate = st.number_input("DOS Lodging Rate", min_value=0.0)
 mie_rate = st.number_input("DOS M&IE Rate", min_value=0.0)
-workshops_on_trip = st.number_input("Workshops on this trip", min_value=1)
+workshops_on_trip = st.number_input("Workshops on Trip", min_value=1)
 
 travel_value = calculate_travel(
     airfare, lodging_rate, mie_rate,
@@ -232,12 +221,10 @@ travel_value = calculate_travel(
 )
 
 # =========================================================
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
+# SECTION D: CONTRIBUTION CLASSIFICATION
 # =========================================================
-# D. CONTRIBUTION CLASSIFICATION & ATTRIBUTION
-# =========================================================
-st.subheader("D. Contribution Classification & Attribution")
+st.divider()
+st.header("D. Contribution Classification")
 
 firm_name = st.selectbox("Firm", sorted(firm_dict.keys()))
 host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
@@ -249,25 +236,16 @@ resource_origin = st.selectbox(
     ["U.S.-based", "Host Country-based", "Third Country-based"]
 )
 
-fao = st.selectbox(
-    "U.S. FAO Alignment",
-    FAO_OPTIONS,
-    index=FAO_OPTIONS.index("Economic Growth (Other)")
-)
+fao = st.selectbox("U.S. FAO Addressed", FAO_OPTIONS)
 
 # =========================================================
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+# SECTION E: EXECUTIVE DASHBOARD REVIEW
+# =========================================================
+st.divider()
+st.header("E. Review & Submit")
 
-# =========================================================
-# E. REVIEW & SUBMIT
-# =========================================================
 total_ot5 = round(labor_value + travel_value, 2)
-fy_number = derive_usg_fiscal_year(date.today()) % 100
-fiscal_year = f"FY{fy_number:02d}"
-
-st.subheader("E. Review & Submit")
-
-st.markdown('<div class="review-box">', unsafe_allow_html=True)
+fiscal_year = derive_usg_fiscal_year(date.today())
 
 col1, col2 = st.columns(2)
 
@@ -277,9 +255,9 @@ with col1:
 
 with col2:
     st.metric("Total OT5 Value", f"${total_ot5:,.2f}")
-    st.write("Fiscal Year:", fiscal_year)
+    st.metric("Fiscal Year", fiscal_year)
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.divider()
 
 # =========================================================
 # SUBMIT
@@ -291,10 +269,10 @@ if st.checkbox("I confirm this OT5 contribution estimate is correct"):
             "fields": {
                 "Amount": total_ot5,
                 "Contribution Date": date.today().isoformat(),
-                "Fiscal Year": {"name": fiscal_year},
+                "Fiscal Year": fiscal_year,
                 "Resource Type": "In-kind",
                 "Resource Origin": resource_origin,
-                "U.S. FAOs Addressed": {"name": fao},
+                "U.S. FAOs Addressed": fao,
                 "Economy": [economy_dict[host_economy]],
                 "Firm": [firm_dict[firm_name]],
                 "Workstream": [workstream_dict[workstream]],
@@ -305,7 +283,7 @@ if st.checkbox("I confirm this OT5 contribution estimate is correct"):
         r = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
 
         if r.status_code in [200, 201]:
-            st.success("OT5 record successfully created.")
+            st.success("OT5 record successfully created in Airtable.")
         else:
             st.error(f"Airtable submission failed ({r.status_code})")
             st.json(r.json())
