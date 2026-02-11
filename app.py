@@ -259,7 +259,6 @@ if st.checkbox("I confirm this OT5 valuation is correct"):
         payload = {
             "fields": {
                 "Amount": total_ot5,
-                "Indicator ID": "OT5",
                 "Contribution Date": date.today().isoformat(),
                 "Fiscal Year": fiscal_year,
                 "Resource Type": "In-kind",
