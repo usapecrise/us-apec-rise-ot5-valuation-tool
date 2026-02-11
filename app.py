@@ -228,7 +228,7 @@ host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
 
 resource_origin = st.selectbox(
     "Resource Origin",
-    ["U.S.-based", "Host Country-based", "Third Country-based"]
+    ["US-based", "Host Country-based", "Third Country-based"]
 )
 
 fao = st.selectbox(
