@@ -241,7 +241,8 @@ fao = st.selectbox(
 # REVIEW
 # =========================================================
 total_ot5 = round(labor_value + travel_value, 2)
-fiscal_year = f"FY {derive_usg_fiscal_year(date.today())}"
+fy_number = derive_usg_fiscal_year(date.today()) % 100
+fiscal_year = f"FY{fy_number}"
 
 st.subheader("E. Review & Submit")
 
