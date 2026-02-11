@@ -17,9 +17,9 @@ st.caption("Agenda-based labor valuation, standardized travel, Airtable submissi
 # =========================================================
 # AIRTABLE CONFIG (MATCHES YOUR SECRETS)
 # =========================================================
-AIRTABLE_TOKEN = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-AIRTABLE_TABLE = os.getenv("AIRTABLE_OT5_TABLE")
+AIRTABLE_TOKEN = st.secrets("AIRTABLE_TOKEN")
+AIRTABLE_BASE_ID = st.secrets("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE = st.secrets("AIRTABLE_OT5_TABLE")
 
 if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE:
     st.error("Missing Airtable configuration. Check Streamlit Secrets.")
