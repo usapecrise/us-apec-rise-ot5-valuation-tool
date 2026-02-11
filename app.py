@@ -14,7 +14,7 @@ st.title("OT5 / PSE-4 Private Sector Valuation Tool")
 st.caption("Agenda-based labor valuation, standardized travel, Airtable submission")
 
 # =========================================================
-# AIRTABLE CONFIG (STREAMLIT CLOUD SAFE)
+# AIRTABLE CONFIG
 # =========================================================
 try:
     AIRTABLE_TOKEN = st.secrets["AIRTABLE_TOKEN"]
@@ -65,7 +65,7 @@ FAO_OPTIONS = [
 ]
 
 # =========================================================
-# LOAD REFERENCE TABLES (WITH DEBUG)
+# LOAD REFERENCE TABLES
 # =========================================================
 @st.cache_data
 def load_reference_table(table_name, primary_field):
@@ -93,7 +93,6 @@ def load_reference_table(table_name, primary_field):
         if rec["fields"].get(primary_field)
     }
 
-# ✅ Correct table names
 economy_dict = load_reference_table("Economy Reference List", "Economy")
 firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
 
@@ -104,21 +103,43 @@ def extract_text_from_pdf(uploaded_file):
     reader = PdfReader(BytesIO(uploaded_file.read()))
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
+# ✅ FIXED VERSION (Handles Your Agenda Format)
 def extract_speaker_hours(text, speaker):
     speaker = speaker.lower()
     total = 0.0
-    time_pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
-    matches = list(re.finditer(time_pattern, text))
+
+    time_pattern = r"(\d{1,2}:\d{2})(?:\s*(am|pm))?\s*[–\-]\s*(\d{1,2}:\d{2})(?:\s*(am|pm))?"
+    matches = list(re.finditer(time_pattern, text, re.IGNORECASE))
 
     for i, m in enumerate(matches):
-        start_t, end_t = m.groups()
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        block = text[start:end].lower()
+        start_time, start_ampm, end_time, end_ampm = m.groups()
+
+        # If only end has am/pm, apply it to start
+        if not start_ampm and end_ampm:
+            start_ampm = end_ampm
+
+        if not start_ampm:
+            start_ampm = "am"
+        if not end_ampm:
+            end_ampm = start_ampm
+
+        start_index = m.start()
+        end_index = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start_index:end_index].lower()
+
         if speaker in block:
-            s = datetime.strptime(start_t, "%H:%M")
-            e = datetime.strptime(end_t, "%H:%M")
-            total += (e - s).seconds / 3600
+            try:
+                s = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
+                e = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
+
+                # Handle noon crossover
+                if e < s:
+                    e = e.replace(hour=e.hour + 12)
+
+                duration = (e - s).seconds / 3600
+                total += duration
+            except:
+                continue
 
     return round(total, 2)
 
@@ -169,8 +190,11 @@ presentation_hours = st.number_input("Presentation Hours", value=presentation_ho
 st.subheader("B. Labor Valuation")
 
 category = assess_seniority_from_agenda(agenda_text)
-category = st.selectbox("Confirm Category", list(HOURLY_RATES.keys()),
-                        index=list(HOURLY_RATES.keys()).index(category))
+category = st.selectbox(
+    "Confirm Category",
+    list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(category)
+)
 
 labor_hours, labor_value = calculate_labor(category, presentation_hours)
 
@@ -217,7 +241,9 @@ total_ot5 = round(labor_value + travel_value, 2)
 fiscal_year = f"FY {derive_usg_fiscal_year(date.today())}"
 
 st.subheader("E. Review & Submit")
+
 st.write({
+    "Presentation Hours": presentation_hours,
     "Labor Value": labor_value,
     "Travel Value": travel_value,
     "Total OT5 Value": total_ot5,
