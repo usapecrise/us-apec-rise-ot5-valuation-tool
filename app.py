@@ -10,8 +10,34 @@ from PyPDF2 import PdfReader
 # STREAMLIT CONFIG
 # =========================================================
 st.set_page_config(page_title="OT5 In-Kind Contribution Estimation Tool", layout="centered")
+
+st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        padding-left: 3rem;
+        padding-right: 3rem;
+    }
+    .section-divider {
+        border-top: 1px solid #e6e6e6;
+        margin-top: 2rem;
+        margin-bottom: 2rem;
+    }
+    .review-box {
+        padding: 1.5rem;
+        border-radius: 8px;
+        border: 1px solid #e6e6e6;
+        background-color: #fafafa;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("OT5 / PSE-4 In-Kind Contribution Estimation Tool")
-st.caption("Agenda-based estimation of private sector labor and travel contributions")
+st.markdown(
+    "<span style='color:gray;'>Agenda-based estimation of private sector labor and travel contributions</span>",
+    unsafe_allow_html=True
+)
 
 # =========================================================
 # AIRTABLE CONFIG
@@ -96,7 +122,7 @@ def load_reference_table(table_name, primary_field):
 economy_dict = load_reference_table("Economy Reference List", "Economy")
 firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
 workstream_dict = load_reference_table("Workstream Reference List", "Workstream")
-engagement_dict = load_reference_table("Workshop Reference List", "Engagement")
+engagement_dict = load_reference_table("Workshop Reference List", "Workshop")  # ✅ FIXED
 
 # =========================================================
 # HELPERS
@@ -129,10 +155,8 @@ def extract_speaker_hours(text, speaker):
         if speaker in block:
             s = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
             e = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
-
             if e < s:
                 e = e.replace(hour=e.hour + 12)
-
             total += (e - s).seconds / 3600
 
     return round(total, 2)
@@ -174,12 +198,18 @@ presentation_hours = st.number_input(
 )
 
 # =========================================================
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+# =========================================================
 # B. ESTIMATED IN-KIND LABOR CONTRIBUTION
 # =========================================================
 st.subheader("B. Estimated In-Kind Labor Contribution")
 
 category = st.selectbox("Contributor Category", list(HOURLY_RATES.keys()))
 labor_hours, labor_value = calculate_labor(category, presentation_hours)
+
+# =========================================================
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
 # =========================================================
 # C. ESTIMATED IN-KIND TRAVEL CONTRIBUTION
@@ -200,6 +230,9 @@ travel_value = calculate_travel(
     airfare, lodging_rate, mie_rate,
     travel_start, travel_end, workshops_on_trip
 )
+
+# =========================================================
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
 # =========================================================
 # D. CONTRIBUTION CLASSIFICATION & ATTRIBUTION
@@ -223,6 +256,9 @@ fao = st.selectbox(
 )
 
 # =========================================================
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+# =========================================================
 # E. REVIEW & SUBMIT
 # =========================================================
 total_ot5 = round(labor_value + travel_value, 2)
@@ -231,10 +267,19 @@ fiscal_year = f"FY{fy_number:02d}"
 
 st.subheader("E. Review & Submit")
 
-st.metric("Total OT5 Contribution Value", f"${total_ot5:,.2f}")
-st.write("Labor Contribution:", f"${labor_value:,.2f}")
-st.write("Travel Contribution:", f"${travel_value:,.2f}")
-st.write("Fiscal Year:", fiscal_year)
+st.markdown('<div class="review-box">', unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric("Labor Contribution", f"${labor_value:,.2f}")
+    st.metric("Travel Contribution", f"${travel_value:,.2f}")
+
+with col2:
+    st.metric("Total OT5 Value", f"${total_ot5:,.2f}")
+    st.write("Fiscal Year:", fiscal_year)
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================================================
 # SUBMIT
