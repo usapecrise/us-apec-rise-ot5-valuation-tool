@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import urllib.parse
+import re
 from datetime import datetime, date
 from io import BytesIO
 from PyPDF2 import PdfReader
@@ -8,9 +9,9 @@ from PyPDF2 import PdfReader
 # =========================================================
 # PAGE CONFIG
 # =========================================================
-st.set_page_config(page_title="Private Sector Resources Valuation Dashboard", layout="wide")
+st.set_page_config(page_title="OT5 Valuation Dashboard", layout="wide")
 st.title("OT5 / PSE-4 Private Sector Contribution Dashboard")
-st.caption("Region-based airfare logic • Trip-level allocation • Engagement-linked reporting")
+st.caption("Agenda-based LOE • Region airfare matrix • Multi-engagement allocation")
 
 # =========================================================
 # AIRTABLE CONFIG
@@ -62,7 +63,6 @@ REGION_MAP = {
     "Russia": "RU"
 }
 
-# Region adjacency rules
 BAND_MATRIX = {
     ("NA","NA"): "A",
     ("SA","SA"): "A",
@@ -91,6 +91,33 @@ def get_band(origin, host):
     if r1 == r2:
         return "A"
     return "C"
+
+# =========================================================
+# AGENDA LOE FUNCTIONS
+# =========================================================
+def extract_text_from_pdf(uploaded_file):
+    reader = PdfReader(BytesIO(uploaded_file.read()))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+def extract_speaker_hours(text, speaker):
+    speaker = speaker.lower()
+    total = 0.0
+    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+
+    matches = list(re.finditer(pattern, text))
+
+    for i, m in enumerate(matches):
+        start_t, end_t = m.groups()
+        start_block = m.end()
+        end_block = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start_block:end_block].lower()
+
+        if speaker in block:
+            s = datetime.strptime(start_t, "%H:%M")
+            e = datetime.strptime(end_t, "%H:%M")
+            total += (e - s).seconds / 3600
+
+    return round(total, 2)
 
 # =========================================================
 # LOAD REFERENCE TABLES
@@ -150,26 +177,30 @@ firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
 workshop_dict = load_workshops_with_workstream()
 
 # =========================================================
-# HELPERS
+# SECTION A: AGENDA & LOE
 # =========================================================
-def calculate_labor(category, hours):
-    total_hours = round(hours * LABOR_MULTIPLIER, 2)
-    return round(total_hours * HOURLY_RATES[category], 2)
-
-def derive_fy(d):
-    fy = d.year + 1 if d.month >= 10 else d.year
-    return f"FY{str(fy)[-2:]}"
-
-# =========================================================
-# SECTION A: SPEAKER
-# =========================================================
-st.header("A. Speaker")
+st.header("A. Agenda & Speaker")
 
 speaker_name = st.text_input("Speaker Name")
-presentation_hours = st.number_input("Total Presentation Hours", min_value=0.0, step=0.25)
+agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
+
+agenda_text = ""
+if agenda_file:
+    agenda_text = extract_text_from_pdf(agenda_file)
+
+agenda_text = st.text_area("Agenda Text (editable)", value=agenda_text, height=250)
+
+auto_hours = extract_speaker_hours(agenda_text, speaker_name) if speaker_name else 0
+
+presentation_hours = st.number_input(
+    "Presentation Hours (auto-detected, editable)",
+    value=auto_hours,
+    step=0.25
+)
 
 category = st.selectbox("Speaker Category", list(HOURLY_RATES.keys()))
-labor_total = calculate_labor(category, presentation_hours)
+
+labor_total = round(presentation_hours * LABOR_MULTIPLIER * HOURLY_RATES[category], 2)
 
 # =========================================================
 # SECTION B: TRAVEL
@@ -181,12 +212,13 @@ host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
 
 travel_start = st.date_input("Travel Start Date")
 travel_end = st.date_input("Travel End Date")
+
 lodging_rate = st.number_input("Lodging Rate (USD)", min_value=0.0)
 
 band = get_band(speaker_origin, host_economy)
 airfare = AIRFARE_VALUES[band]
 
-st.info(f"Auto-Assigned Airfare Band: {band} (${airfare})")
+st.info(f"Airfare Band: {band} (${airfare})")
 
 days = (travel_end - travel_start).days + 1
 nights = max(days - 1, 0)
@@ -205,25 +237,10 @@ engagements_selected = st.multiselect(
 num_engagements = len(engagements_selected) if engagements_selected else 1
 travel_per_engagement = round(travel_total / num_engagements, 2)
 
-st.write(f"Travel will be split across {num_engagements} engagement(s).")
-
 # =========================================================
-# SECTION D: CLASSIFICATION
+# SECTION D: REVIEW
 # =========================================================
-st.header("D. Classification")
-
-firm_name = st.selectbox("Firm", sorted(firm_dict.keys()))
-resource_origin = st.selectbox(
-    "Resource Origin",
-    ["U.S.-based", "Host Country-based", "Third Country-based"]
-)
-
-fiscal_year = derive_fy(travel_start)
-
-# =========================================================
-# SECTION E: REVIEW
-# =========================================================
-st.header("E. Review")
+st.header("D. Review")
 
 col1, col2 = st.columns(2)
 
@@ -234,10 +251,9 @@ with col1:
 with col2:
     total_per_engagement = labor_total + travel_per_engagement
     st.metric("Total per Engagement", f"${total_per_engagement:,.2f}")
-    st.metric("Fiscal Year", fiscal_year)
 
 # =========================================================
-# SUBMIT MULTIPLE RECORDS
+# SUBMIT
 # =========================================================
 if st.checkbox("I confirm this OT5 allocation is correct"):
     if st.button("Submit OT5 Record(s)"):
@@ -248,11 +264,10 @@ if st.checkbox("I confirm this OT5 allocation is correct"):
                 "fields": {
                     "Amount": total_per_engagement,
                     "Contribution Date": travel_start.isoformat(),
-                    "Fiscal Year": fiscal_year,
+                    "Fiscal Year": f"FY{str(travel_start.year + (1 if travel_start.month >= 10 else 0))[-2:]}",
                     "Resource Type": "In-kind",
-                    "Resource Origin": resource_origin,
                     "Economy": [economy_dict[host_economy]],
-                    "Firm": [firm_dict[firm_name]],
+                    "Firm": [firm_dict.get(speaker_name, "")],
                     "Engagement": [workshop_dict[e]["id"]],
                     "Workstream": [workshop_dict[e]["workstream_id"]]
                 }
