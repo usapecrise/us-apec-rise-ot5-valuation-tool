@@ -43,7 +43,7 @@ HOURLY_RATES = {
 LABOR_MULTIPLIER = 3.5
 
 # =========================================================
-# APEC REGION MATRIX
+# REGION MATRIX
 # =========================================================
 ECONOMY_REGION = {
     "United States": "North America",
@@ -84,9 +84,9 @@ REGION_BANDS = {
     ("Northeast Asia", "Russia"): 900,
 }
 
-def calculate_airfare(origin, host):
-    r1 = ECONOMY_REGION.get(origin)
-    r2 = ECONOMY_REGION.get(host)
+def calculate_airfare(origin_economy, host_economy):
+    r1 = ECONOMY_REGION.get(origin_economy)
+    r2 = ECONOMY_REGION.get(host_economy)
 
     if not r1 or not r2:
         return 1400
@@ -100,9 +100,69 @@ def calculate_airfare(origin, host):
     return 1400
 
 # =========================================================
-# LOAD AIRTABLE TABLES
+# LOAD REFERENCE TABLES
 # =========================================================
 @st.cache_data
+def load_economies():
+    url = airtable_url("Economy Reference List")
+    records = []
+    offset = None
+
+    while True:
+        params = {"offset": offset} if offset else {}
+        r = requests.get(url, headers=HEADERS, params=params)
+        r.raise_for_status()
+        data = r.json()
+        records.extend(data.get("records", []))
+        offset = data.get("offset")
+        if not offset:
+            break
+
+    economy_map = {}
+    reverse_map = {}
+
+    for rec in records:
+        name = rec["fields"].get("Economy")
+        if name:
+            economy_map[name] = rec["id"]
+            reverse_map[rec["id"]] = name
+
+    return economy_map, reverse_map
+
+@st.cache_data
+def load_firms():
+    url = airtable_url("OT4 Private Sector Firms")
+    records = []
+    offset = None
+
+    while True:
+        params = {"offset": offset} if offset else {}
+        r = requests.get(url, headers=HEADERS, params=params)
+        r.raise_for_status()
+        data = r.json()
+        records.extend(data.get("records", []))
+        offset = data.get("offset")
+        if not offset:
+            break
+
+    firm_map = {}
+
+    for rec in records:
+        name = rec["fields"].get("Firm")
+        linked_economy = rec["fields"].get("Economy")
+
+        if name and linked_economy:
+            firm_map[name] = {
+                "id": rec["id"],
+                "economy_id": linked_economy[0]
+            }
+
+    return firm_map
+
+@st.cache_data
+def load_engagements():
+    return load_reference_table("Workshop Reference List", "Workshop")
+
 def load_reference_table(table_name, primary_field):
     url = airtable_url(table_name)
     records = []
@@ -124,9 +184,9 @@ def load_reference_table(table_name, primary_field):
         if rec["fields"].get(primary_field)
     }
 
-economy_dict = load_reference_table("Economy Reference List", "Economy")
-firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
-engagement_dict = load_reference_table("Workshop Reference List", "Workshop")
+economy_dict, economy_reverse = load_economies()
+firm_data = load_firms()
+engagement_dict = load_engagements()
 
 # =========================================================
 # HELPERS
@@ -184,7 +244,6 @@ presentation_hours = st.number_input(
 )
 
 category = st.selectbox("Seniority Category", list(HOURLY_RATES.keys()))
-
 labor_value = presentation_hours * LABOR_MULTIPLIER * HOURLY_RATES[category]
 
 # =========================================================
@@ -192,15 +251,18 @@ labor_value = presentation_hours * LABOR_MULTIPLIER * HOURLY_RATES[category]
 # =========================================================
 st.header("B. Travel")
 
-firm_name = st.selectbox("Firm", sorted(firm_dict.keys()))
+firm_name = st.selectbox("Firm", sorted(firm_data.keys()))
 host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
 
-airfare_auto = calculate_airfare(firm_name, host_economy)
+firm_economy_id = firm_data[firm_name]["economy_id"]
+firm_economy_name = economy_reverse.get(firm_economy_id)
+
+airfare_auto = calculate_airfare(firm_economy_name, host_economy)
 
 override_airfare = st.checkbox("Override airfare")
 
 if override_airfare:
-    airfare = st.number_input("Manual Airfare Amount", min_value=0.0, value=float(airfare_auto))
+    airfare = st.number_input("Manual Airfare", min_value=0.0, value=float(airfare_auto))
 else:
     airfare = airfare_auto
     st.info(f"Auto-calculated airfare: ${airfare:,.0f}")
@@ -230,13 +292,10 @@ selected_engagements = st.multiselect(
 
 total_value = labor_value + travel_total
 
-if selected_engagements:
-    per_engagement_value = total_value / len(selected_engagements)
-else:
-    per_engagement_value = 0
+per_engagement_value = total_value / len(selected_engagements) if selected_engagements else 0
 
 # =========================================================
-# SECTION D — REVIEW
+# REVIEW
 # =========================================================
 st.header("D. Review")
 
@@ -264,7 +323,7 @@ if st.checkbox("I confirm this OT5 estimate is correct"):
                     "Fiscal Year": derive_fy(date.today()),
                     "Resource Type": "In-kind",
                     "Economy": [economy_dict[host_economy]],
-                    "Firm": [firm_dict[firm_name]],
+                    "Firm": [firm_data[firm_name]["id"]],
                     "Engagement": [engagement_dict[engagement]]
                 }
             }
