@@ -285,6 +285,10 @@ if st.checkbox("Confirm OT5 estimate is correct"):
                 "Workstream": [workstream_id] if workstream_id else []
             }
         }
+st.write("Economy ID:", economy_lookup[host]["id"])
+st.write("Firm ID:", firm_lookup[firm]["id"])
+st.write("Engagement ID:", engagement_id)
+st.write("Workstream ID:", workstream_id)
 
         r = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
 
@@ -293,6 +297,4 @@ if st.checkbox("Confirm OT5 estimate is correct"):
         else:
             st.error(f"Submission failed ({r.status_code})")
             st.json(r.json())
-
-st.write("BASE ID IN USE:", AIRTABLE_BASE_ID)
 
