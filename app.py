@@ -11,7 +11,7 @@ from PyPDF2 import PdfReader
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("US APEC-RISE Private Sector Valuation Tool")
-st.caption("Standardized private sector contribution valuation tool with automated LOE and travel cost logic.")
+st.caption("Standardized private sector contribution valuation tool with automated LOE and travel cost logic")
 
 # =========================================================
 # AIRTABLE CONFIG
