@@ -293,3 +293,6 @@ if st.checkbox("Confirm OT5 estimate is correct"):
         else:
             st.error(f"Submission failed ({r.status_code})")
             st.json(r.json())
+
+st.write("BASE ID IN USE:", AIRTABLE_BASE_ID)
+
