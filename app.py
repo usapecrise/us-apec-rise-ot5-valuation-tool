@@ -219,6 +219,11 @@ nights = max(days - 1, 0)
 travel_total = airfare + (lodging_rate * nights) + (mie_rate * days)
 travel_value = travel_total / workshops_on_trip
 
+st.write("Firm origin economy:", firm_origin)
+st.write("Host economy:", host_economy)
+st.write("Origin region:", economy_table.get(firm_origin, {}).get("fields", {}).get("Region"))
+st.write("Host region:", economy_table.get(host_economy, {}).get("fields", {}).get("Region"))
+
 # =========================================================
 # ENGAGEMENT + AUTO WORKSTREAM
 # =========================================================
