@@ -5,18 +5,16 @@ import urllib.parse
 from datetime import datetime, date
 from io import BytesIO
 from PyPDF2 import PdfReader
-import math
 
 # =========================================================
 # PAGE CONFIG
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
-
 st.title("OT5 / PSE-4 Private Sector Contribution Tool")
-st.caption("Agenda-based labor valuation · Region-based airfare · Multi-event allocation")
+st.caption("Agenda-driven labor valuation • Standardized travel • Structured Airtable submission")
 
 # =========================================================
-# AIRTABLE CONFIG
+# AIRTABLE SECRETS
 # =========================================================
 try:
     AIRTABLE_TOKEN = st.secrets["AIRTABLE_TOKEN"]
@@ -31,8 +29,8 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def airtable_url(table_name):
-    return f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{urllib.parse.quote(table_name)}"
+def airtable_url(table):
+    return f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{urllib.parse.quote(table)}"
 
 # =========================================================
 # CONSTANTS
@@ -43,26 +41,27 @@ HOURLY_RATES = {
 }
 
 LABOR_MULTIPLIER = 3.5
-TRAVEL_DAY_MIE_FACTOR = 0.75
-STANDARD_TRAVEL_DAYS = 2
 
-REGION_MATRIX = {
-    "North America": 700,
-    "Latin America": 900,
-    "Asia-Pacific": 1400,
-    "Oceania": 1500
+AIRFARE_BANDS = {
+    "Domestic": 550,
+    "Regional": 700,
+    "Intercontinental": 1400
 }
 
-ECONOMY_REGION = {
-    "Australia": "Oceania",
-    "Chile": "Latin America",
-    "Mexico": "Latin America",
-    "United States": "North America",
-    "Japan": "Asia-Pacific",
-    "Viet Nam": "Asia-Pacific"
-}
-
-VALID_FYS = ["FY25", "FY26", "FY27", "FY28", "FY29", "FY30"]
+FAO_OPTIONS = [
+    "Peace and Security",
+    "Democracy",
+    "Human Rights and Governance",
+    "Health",
+    "Education",
+    "Economic Growth (Other)",
+    "Agriculture and Food Security",
+    "Water, Sanitation, and Hygiene",
+    "Water Management",
+    "Gender",
+    "Youth",
+    "Inclusive Development"
+]
 
 # =========================================================
 # LOAD REFERENCE TABLES
@@ -76,8 +75,7 @@ def load_reference_table(table_name, primary_field):
     while True:
         params = {"offset": offset} if offset else {}
         r = requests.get(url, headers=HEADERS, params=params)
-        if r.status_code != 200:
-            raise Exception(r.text)
+        r.raise_for_status()
 
         data = r.json()
         records.extend(data.get("records", []))
@@ -91,161 +89,211 @@ def load_reference_table(table_name, primary_field):
         if rec["fields"].get(primary_field)
     }
 
+@st.cache_data
+def load_workshops():
+    url = airtable_url("Workshop Reference List")
+    records = []
+    offset = None
+
+    while True:
+        params = {"offset": offset} if offset else {}
+        r = requests.get(url, headers=HEADERS, params=params)
+        r.raise_for_status()
+
+        data = r.json()
+        records.extend(data.get("records", []))
+        offset = data.get("offset")
+        if not offset:
+            break
+
+    workshop_map = {}
+    for rec in records:
+        name = rec["fields"].get("Workshop")
+        if name:
+            workshop_map[name] = rec["id"]
+
+    return workshop_map
+
 economy_dict = load_reference_table("Economy Reference List", "Economy")
 firm_dict = load_reference_table("OT4 Private Sector Firms", "Firm")
-workstream_dict = load_reference_table("Workstream Reference List", "Workstream")
-engagement_dict = load_reference_table("Workshop Reference List", "Workshop")
+workshop_dict = load_workshops()
 
 # =========================================================
-# SECTION A – SPEAKER & LOE (AUTO)
+# HELPERS
 # =========================================================
-st.header("A. Speaker & Level of Effort")
+def extract_text_from_pdf(uploaded_file):
+    reader = PdfReader(BytesIO(uploaded_file.read()))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+def parse_time(t):
+    t = t.strip().lower()
+    return datetime.strptime(t, "%I:%M %p")
+
+def extract_speaker_hours(text, speaker):
+    speaker = speaker.lower()
+    total = 0.0
+
+    pattern = r"(\d{1,2}:\d{2}\s*(?:am|pm))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:am|pm))"
+    matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+
+    for i, m in enumerate(matches):
+        start_time, end_time = m.groups()
+        start_idx = m.end()
+        end_idx = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+
+        block = text[start_idx:end_idx].lower()
+
+        if speaker in block:
+            s = parse_time(start_time)
+            e = parse_time(end_time)
+            total += (e - s).seconds / 3600
+
+    return round(float(total), 2)
+
+def assess_seniority(text):
+    senior_patterns = [
+        r"\bceo\b", r"\bcoo\b", r"\bcfo\b",
+        r"\bpresident\b", r"\bvice president\b", r"\bvp\b",
+        r"\bmanaging director\b", r"\bpartner\b",
+        r"\bprincipal\b", r"\bco[- ]?founder\b"
+    ]
+    for p in senior_patterns:
+        if re.search(p, text.lower()):
+            return "Executive / Senior Leadership"
+    return "Senior Specialist"
+
+def derive_fy(d):
+    fy = d.year + 1 if d.month >= 10 else d.year
+    return f"FY{str(fy)[-2:]}"
+
+# =========================================================
+# AGENDA
+# =========================================================
+st.header("A. Speaker & Agenda")
 
 speaker_name = st.text_input("Speaker Name")
 
-agenda_file = st.file_uploader("Upload Agenda PDF", type=["pdf"])
+agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
+
+agenda_text = ""
+if agenda_file:
+    agenda_text = extract_text_from_pdf(agenda_file)
 
 auto_hours = 0.0
-
-if agenda_file and speaker_name:
-    reader = PdfReader(BytesIO(agenda_file.read()))
-    agenda_text = "\n".join(page.extract_text() or "" for page in reader.pages)
-
-    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
-    matches = list(re.finditer(pattern, agenda_text))
-
-    for i, m in enumerate(matches):
-        start_t, end_t = m.groups()
-        block_start = m.end()
-        block_end = matches[i+1].start() if i+1 < len(matches) else len(agenda_text)
-        block = agenda_text[block_start:block_end].lower()
-
-        if speaker_name.lower() in block:
-            s = datetime.strptime(start_t, "%H:%M")
-            e = datetime.strptime(end_t, "%H:%M")
-            auto_hours += (e - s).seconds / 3600
-
-auto_hours = float(round(auto_hours, 2))
+if speaker_name and agenda_text:
+    auto_hours = extract_speaker_hours(agenda_text, speaker_name)
 
 presentation_hours = st.number_input(
-    "Presentation Hours (auto-detected, editable)",
+    "Presentation Hours",
+    min_value=0.0,
     value=float(auto_hours),
-    step=0.25,
-    format="%.2f"
-)
-
-category = st.selectbox("Speaker Category", list(HOURLY_RATES.keys()))
-
-labor_value = round(
-    presentation_hours * LABOR_MULTIPLIER * HOURLY_RATES[category],
-    2
+    step=0.25
 )
 
 # =========================================================
-# SECTION B – TRAVEL
+# LABOR
 # =========================================================
-st.header("B. Travel")
+st.header("B. Labor")
 
-host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
-home_economy = st.selectbox("Home Economy", sorted(economy_dict.keys()))
+category_auto = assess_seniority(agenda_text)
+category = st.selectbox(
+    "Seniority Category",
+    list(HOURLY_RATES.keys()),
+    index=list(HOURLY_RATES.keys()).index(category_auto)
+)
 
-region = ECONOMY_REGION.get(host_economy, "Asia-Pacific")
-airfare = REGION_MATRIX.get(region, 1200)
-
-travel_start = st.date_input("Travel Start")
-travel_end = st.date_input("Travel End")
-
-lodging_rate = st.number_input("DOS Lodging Rate", min_value=0.0)
-mie_rate = st.number_input("DOS M&IE Rate", min_value=0.0)
-
-days = (travel_end - travel_start).days + 1
-nights = max(days - 1, 0)
-
-lodging_total = lodging_rate * nights
-mie_total = mie_rate * days
-travel_total = airfare + lodging_total + mie_total
+labor_hours = presentation_hours * LABOR_MULTIPLIER
+labor_value = labor_hours * HOURLY_RATES[category]
 
 # =========================================================
-# SECTION C – MULTI EVENT SPLIT
+# TRAVEL
 # =========================================================
-st.header("C. Engagement Allocation")
+st.header("C. Travel")
+
+trip_type = st.selectbox("Trip Type", list(AIRFARE_BANDS.keys()))
+airfare = AIRFARE_BANDS[trip_type]
+
+travel_value = airfare
+
+# =========================================================
+# ENGAGEMENT ALLOCATION
+# =========================================================
+st.header("D. Engagement Allocation")
 
 selected_engagements = st.multiselect(
     "Select Engagement(s)",
-    sorted(engagement_dict.keys())
+    sorted(workshop_dict.keys())
 )
 
-workstream = st.selectbox(
-    "Select Workstream",
-    sorted(workstream_dict.keys())
-)
-
-num_events = max(len(selected_engagements), 1)
-
-allocated_travel = round(travel_total / num_events, 2)
-allocated_labor = round(labor_value / num_events, 2)
-allocated_total = round(allocated_travel + allocated_labor, 2)
-
 # =========================================================
-# SECTION D – POLICY FIELDS
+# POLICY INFO
 # =========================================================
-st.header("D. Contribution Details")
+st.header("E. Contribution Information")
 
 firm_name = st.selectbox("Firm", sorted(firm_dict.keys()))
+host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
 
 resource_origin = st.selectbox(
     "Resource Origin",
     ["U.S.-based", "Host Country-based", "Third Country-based"]
 )
 
-fiscal_year = st.selectbox("Fiscal Year", VALID_FYS)
+fao = st.selectbox("U.S. FAO Addressed", FAO_OPTIONS)
+
+contribution_date = st.date_input("Contribution Date", value=date.today())
+fiscal_year = derive_fy(contribution_date)
 
 # =========================================================
-# DASHBOARD
+# REVIEW DASHBOARD
 # =========================================================
-st.header("E. Review")
+st.header("F. Review")
+
+total_value = labor_value + travel_value
+
+if selected_engagements:
+    allocated_per_engagement = total_value / len(selected_engagements)
+else:
+    allocated_per_engagement = 0
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.metric("Labor Contribution (per event)", f"${allocated_labor:,.2f}")
-    st.metric("Travel Contribution (per event)", f"${allocated_travel:,.2f}")
+    st.metric("Labor Contribution", f"${labor_value:,.2f}")
+    st.metric("Travel Contribution", f"${travel_value:,.2f}")
 
 with col2:
-    st.metric("Total OT5 Value (per event)", f"${allocated_total:,.2f}")
-    st.write(f"Fiscal Year: {fiscal_year}")
+    st.metric("Total Contribution", f"${total_value:,.2f}")
+    st.metric("Fiscal Year", fiscal_year)
+
+if selected_engagements:
+    st.info(f"Will create {len(selected_engagements)} OT5 record(s) at ${allocated_per_engagement:,.2f} each")
 
 # =========================================================
 # SUBMIT
 # =========================================================
-if st.checkbox("I confirm this OT5 estimate is correct"):
-
-    if st.button("Submit OT5 Record(s) to Airtable"):
+if st.checkbox("I confirm this contribution estimate is correct"):
+    if st.button("Submit to Airtable"):
 
         for engagement in selected_engagements:
 
             payload = {
                 "fields": {
-                    "Amount": allocated_total,
-                    "Contribution Date": date.today().isoformat(),
+                    "Amount": round(allocated_per_engagement, 2),
+                    "Contribution Date": contribution_date.isoformat(),
                     "Fiscal Year": fiscal_year,
                     "Resource Type": "In-kind",
                     "Resource Origin": resource_origin,
+                    "U.S. FAOs Addressed": fao,
                     "Economy": [economy_dict[host_economy]],
                     "Firm": [firm_dict[firm_name]],
-                    "Engagement": [engagement_dict[engagement]],
-                    "Workstream": [workstream_dict[workstream]]
+                    "Engagement": [workshop_dict[engagement]]
                 }
             }
 
-            r = requests.post(
-                airtable_url(AIRTABLE_TABLE),
-                headers=HEADERS,
-                json=payload
-            )
+            r = requests.post(airtable_url(AIRTABLE_TABLE), headers=HEADERS, json=payload)
 
             if r.status_code not in [200, 201]:
-                st.error(r.json())
+                st.error(f"Submission failed: {r.text}")
                 st.stop()
 
         st.success("OT5 record(s) successfully created.")
