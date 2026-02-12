@@ -59,7 +59,7 @@ FAO_OPTIONS = [
 ]
 
 # =========================================================
-# LOAD AIRTABLE TABLES
+# LOAD TABLES
 # =========================================================
 @st.cache_data
 def load_table(table_name):
@@ -82,9 +82,10 @@ def load_table(table_name):
 economy_table = load_table("Economy Reference List")
 firm_table = load_table("OT4 Private Sector Firms")
 workshop_table = load_table("Workshop Reference List")
+workstream_table = load_table("Workstream Reference List")
 
 # =========================================================
-# AGENDA PARSER
+# AGENDA PARSING
 # =========================================================
 def extract_text(uploaded_file):
     reader = PdfReader(BytesIO(uploaded_file.read()))
@@ -97,11 +98,11 @@ def extract_speaker_hours(text, speaker):
     speaker = speaker.lower()
     total = 0.0
 
-    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})\s*(am|pm)?"
-    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+    pattern = r"(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})"
+    matches = list(re.finditer(pattern, text))
 
     for i, m in enumerate(matches):
-        start_time, end_time, meridian = m.groups()
+        start_time, end_time = m.groups()
         start_idx = m.end()
         end_idx = matches[i+1].start() if i+1 < len(matches) else len(text)
         block = text[start_idx:end_idx].lower()
@@ -118,9 +119,9 @@ def extract_speaker_hours(text, speaker):
     return round(total, 2)
 
 # =========================================================
-# AIRFARE LOGIC (REGION-DRIVEN)
+# FIRM ORIGIN LOOKUP
 # =========================================================
-def get_firm_origin_economy(firm_name):
+def get_firm_origin(firm_name):
     firm_record = firm_table.get(firm_name)
     if not firm_record:
         return None
@@ -129,15 +130,22 @@ def get_firm_origin_economy(firm_name):
     if not linked:
         return None
 
-    linked_id = linked[0]
+    econ_id = linked[0]
 
     for econ_name, econ_record in economy_table.items():
-        if econ_record["id"] == linked_id:
+        if econ_record["id"] == econ_id:
             return econ_name
 
     return None
 
+# =========================================================
+# AIRFARE LOGIC (DATA-DRIVEN)
+# =========================================================
 def calculate_airfare(origin, host):
+
+    # Always treat "Other" as intercontinental
+    if origin == "Other" or host == "Other":
+        return AIRFARE_BANDS["Intercontinental"]
 
     if not origin or not host:
         return AIRFARE_BANDS["Intercontinental"]
@@ -162,7 +170,6 @@ def calculate_airfare(origin, host):
 st.header("A. Speaker & Level of Effort")
 
 speaker_name = st.text_input("Speaker Name")
-
 agenda_file = st.file_uploader("Upload Agenda (PDF)", type=["pdf"])
 
 agenda_text = extract_text(agenda_file) if agenda_file else ""
@@ -177,9 +184,6 @@ presentation_hours = st.number_input(
 
 category = st.selectbox("Seniority Category", list(HOURLY_RATES.keys()))
 
-# =========================================================
-# LABOR CALC
-# =========================================================
 total_labor_hours = presentation_hours * LABOR_MULTIPLIER
 labor_value = total_labor_hours * HOURLY_RATES[category]
 
@@ -191,8 +195,7 @@ st.header("B. Travel")
 firm_name = st.selectbox("Firm", sorted(firm_table.keys()))
 host_economy = st.selectbox("Host Economy", sorted(economy_table.keys()))
 
-firm_origin = get_firm_origin_economy(firm_name)
-
+firm_origin = get_firm_origin(firm_name)
 auto_airfare = calculate_airfare(firm_origin, host_economy)
 
 override = st.checkbox("Override airfare")
@@ -217,7 +220,7 @@ travel_total = airfare + (lodging_rate * nights) + (mie_rate * days)
 travel_value = travel_total / workshops_on_trip
 
 # =========================================================
-# ENGAGEMENT + WORKSTREAM AUTO
+# ENGAGEMENT + AUTO WORKSTREAM
 # =========================================================
 st.header("C. Engagement")
 
@@ -228,7 +231,7 @@ workstream_name = None
 
 if linked_ws:
     ws_id = linked_ws[0]
-    for name, record in load_table("Workstream Reference List").items():
+    for name, record in workstream_table.items():
         if record["id"] == ws_id:
             workstream_name = name
             break
@@ -242,8 +245,10 @@ st.header("D. Classification")
 
 fiscal_year = st.selectbox("Fiscal Year", FY_OPTIONS)
 fao = st.selectbox("U.S. FAOs Addressed", FAO_OPTIONS)
-resource_origin = st.selectbox("Resource Origin",
-                               ["U.S.-based","Host Country-based","Third Country-based"])
+resource_origin = st.selectbox(
+    "Resource Origin",
+    ["U.S.-based","Host Country-based","Third Country-based"]
+)
 
 # =========================================================
 # REVIEW
@@ -273,7 +278,7 @@ if st.checkbox("I confirm this OT5 contribution estimate is correct"):
                 "Firm": [firm_table[firm_name]["id"]],
                 "Economy": [economy_table[host_economy]["id"]],
                 "Engagement": [workshop_table[selected_workshop]["id"]],
-                "Workstream": [load_table("Workstream Reference List")[workstream_name]["id"]]
+                "Workstream": [workstream_table[workstream_name]["id"]] if workstream_name else []
             }
         }
 
