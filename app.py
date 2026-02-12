@@ -1,5 +1,4 @@
 import streamlit as st
-import re
 import requests
 import urllib.parse
 from datetime import datetime, date
@@ -7,11 +6,11 @@ from io import BytesIO
 from PyPDF2 import PdfReader
 
 # =========================================================
-# CONFIG
+# PAGE CONFIG
 # =========================================================
-st.set_page_config(page_title="OT5 Valuation Dashboard", layout="wide")
+st.set_page_config(page_title="Private Sector Resources Valuation Dashboard", layout="wide")
 st.title("OT5 / PSE-4 Private Sector Contribution Dashboard")
-st.caption("Agenda-based valuation • Trip-level allocation • Engagement-linked reporting")
+st.caption("Region-based airfare logic • Trip-level allocation • Engagement-linked reporting")
 
 # =========================================================
 # AIRTABLE CONFIG
@@ -40,11 +39,58 @@ HOURLY_RATES = {
 }
 
 LABOR_MULTIPLIER = 3.5
-AIRFARE_BANDS = {
-    "Domestic": 550,
-    "Regional": 700,
-    "Intercontinental": 1400
+
+AIRFARE_VALUES = {
+    "A": 600,
+    "B": 900,
+    "C": 1500
 }
+
+# =========================================================
+# REGION MAP
+# =========================================================
+REGION_MAP = {
+    "United States": "NA", "Canada": "NA", "Mexico": "NA",
+    "Chile": "SA", "Peru": "SA",
+    "Japan": "NEA", "Korea": "NEA", "China": "NEA",
+    "Chinese Taipei": "NEA", "Hong Kong": "NEA",
+    "Singapore": "SEA", "Malaysia": "SEA", "Thailand": "SEA",
+    "Vietnam": "SEA", "Philippines": "SEA",
+    "Indonesia": "SEA", "Brunei": "SEA",
+    "Australia": "OC", "New Zealand": "OC",
+    "Papua New Guinea": "OC",
+    "Russia": "RU"
+}
+
+# Region adjacency rules
+BAND_MATRIX = {
+    ("NA","NA"): "A",
+    ("SA","SA"): "A",
+    ("NEA","NEA"): "A",
+    ("SEA","SEA"): "A",
+    ("OC","OC"): "A",
+    ("RU","RU"): "A",
+    ("NA","SA"): "B",
+    ("NA","NEA"): "B",
+    ("NEA","SEA"): "B",
+    ("SEA","OC"): "B",
+    ("NEA","RU"): "B"
+}
+
+def get_band(origin, host):
+    r1 = REGION_MAP.get(origin)
+    r2 = REGION_MAP.get(host)
+
+    if not r1 or not r2:
+        return "C"
+
+    if (r1, r2) in BAND_MATRIX:
+        return BAND_MATRIX[(r1, r2)]
+    if (r2, r1) in BAND_MATRIX:
+        return BAND_MATRIX[(r2, r1)]
+    if r1 == r2:
+        return "A"
+    return "C"
 
 # =========================================================
 # LOAD REFERENCE TABLES
@@ -117,27 +163,30 @@ def derive_fy(d):
 # =========================================================
 # SECTION A: SPEAKER
 # =========================================================
-st.header("A. Speaker Information")
+st.header("A. Speaker")
 
 speaker_name = st.text_input("Speaker Name")
 presentation_hours = st.number_input("Total Presentation Hours", min_value=0.0, step=0.25)
 
 category = st.selectbox("Speaker Category", list(HOURLY_RATES.keys()))
-
 labor_total = calculate_labor(category, presentation_hours)
 
 # =========================================================
-# SECTION B: TRIP
+# SECTION B: TRAVEL
 # =========================================================
-st.header("B. Trip-Level Travel")
+st.header("B. Trip")
 
-trip_type = st.selectbox("Trip Type", list(AIRFARE_BANDS.keys()))
-airfare = AIRFARE_BANDS[trip_type]
+speaker_origin = st.selectbox("Speaker Origin Economy", sorted(REGION_MAP.keys()))
+host_economy = st.selectbox("Host Economy", sorted(economy_dict.keys()))
 
 travel_start = st.date_input("Travel Start Date")
 travel_end = st.date_input("Travel End Date")
-
 lodging_rate = st.number_input("Lodging Rate (USD)", min_value=0.0)
+
+band = get_band(speaker_origin, host_economy)
+airfare = AIRFARE_VALUES[band]
+
+st.info(f"Auto-Assigned Airfare Band: {band} (${airfare})")
 
 days = (travel_end - travel_start).days + 1
 nights = max(days - 1, 0)
@@ -156,18 +205,7 @@ engagements_selected = st.multiselect(
 num_engagements = len(engagements_selected) if engagements_selected else 1
 travel_per_engagement = round(travel_total / num_engagements, 2)
 
-st.info(f"Travel will be split evenly across {num_engagements} engagement(s).")
-
-# Auto-display derived workstreams
-derived_workstreams = set()
-
-for e in engagements_selected:
-    ws_id = workshop_dict[e]["workstream_id"]
-    if ws_id:
-        derived_workstreams.add(ws_id)
-
-st.write("Derived Workstream(s):")
-st.write(derived_workstreams if derived_workstreams else "None Linked")
+st.write(f"Travel will be split across {num_engagements} engagement(s).")
 
 # =========================================================
 # SECTION D: CLASSIFICATION
@@ -175,7 +213,6 @@ st.write(derived_workstreams if derived_workstreams else "None Linked")
 st.header("D. Classification")
 
 firm_name = st.selectbox("Firm", sorted(firm_dict.keys()))
-host_economy = st.selectbox("Economy", sorted(economy_dict.keys()))
 resource_origin = st.selectbox(
     "Resource Origin",
     ["U.S.-based", "Host Country-based", "Third Country-based"]
@@ -186,7 +223,7 @@ fiscal_year = derive_fy(travel_start)
 # =========================================================
 # SECTION E: REVIEW
 # =========================================================
-st.header("E. Review & Submit")
+st.header("E. Review")
 
 col1, col2 = st.columns(2)
 
@@ -200,10 +237,10 @@ with col2:
     st.metric("Fiscal Year", fiscal_year)
 
 # =========================================================
-# SUBMIT
+# SUBMIT MULTIPLE RECORDS
 # =========================================================
 if st.checkbox("I confirm this OT5 allocation is correct"):
-    if st.button("Submit OT5 Records"):
+    if st.button("Submit OT5 Record(s)"):
 
         for e in engagements_selected:
 
@@ -221,6 +258,11 @@ if st.checkbox("I confirm this OT5 allocation is correct"):
                 }
             }
 
-            requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
+            r = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
 
-        st.success("OT5 records successfully created.")
+            if r.status_code not in [200, 201]:
+                st.error(f"Submission failed for {e}")
+                st.json(r.json())
+                st.stop()
+
+        st.success("All OT5 records successfully created.")
