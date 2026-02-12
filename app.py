@@ -11,7 +11,7 @@ from PyPDF2 import PdfReader
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
 st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption("Agenda-based labor valuation, auto airfare logic, Airtable submission")
+st.caption("Agenda-based labor valuation • Region-based airfare • Airtable submission")
 
 # =========================================================
 # AIRTABLE CONFIG
@@ -68,6 +68,7 @@ economy_records = load_full_table("Economy Reference List")
 firm_records = load_full_table("OT4 Private Sector Firms")
 workshop_records = load_full_table("Workshop Reference List")
 
+# Lookup dictionaries
 economy_lookup = {
     rec["fields"]["Economy"]: rec
     for rec in economy_records
@@ -87,7 +88,58 @@ workshop_lookup = {
 }
 
 # =========================================================
-# AGENDA PARSING (FIXED + ROBUST)
+# REGION LOGIC
+# =========================================================
+def get_region(economy_name):
+    rec = economy_lookup.get(economy_name)
+    if not rec:
+        return None
+
+    region = rec["fields"].get("Region")
+
+    # If single select, Airtable returns string
+    # If linked or other format, handle safely
+    if isinstance(region, list):
+        return region[0]
+    return region
+
+
+def get_firm_origin_economy(firm_name):
+    firm_rec = firm_lookup.get(firm_name)
+    if not firm_rec:
+        return None
+
+    linked_ids = firm_rec["fields"].get("Economy")
+    if not linked_ids:
+        return None
+
+    economy_id = linked_ids[0]
+
+    for rec in economy_records:
+        if rec["id"] == economy_id:
+            return rec["fields"].get("Economy")
+
+    return None
+
+
+def calculate_airfare(origin, host):
+    if not origin or not host:
+        return AIRFARE_BANDS["Intercontinental"]
+
+    if origin == host:
+        return AIRFARE_BANDS["Domestic"]
+
+    origin_region = get_region(origin)
+    host_region = get_region(host)
+
+    if origin_region and host_region and origin_region == host_region:
+        return AIRFARE_BANDS["Regional"]
+
+    return AIRFARE_BANDS["Intercontinental"]
+
+
+# =========================================================
+# AGENDA PARSING (ROBUST)
 # =========================================================
 def extract_text(uploaded_file):
     reader = PdfReader(BytesIO(uploaded_file.read()))
@@ -95,7 +147,7 @@ def extract_text(uploaded_file):
 
 
 def parse_agenda_hours(text, speaker_name):
-    if not speaker_name or not text:
+    if not text or not speaker_name:
         return 0.0
 
     text = text.replace("–", "-")
@@ -112,7 +164,7 @@ def parse_agenda_hours(text, speaker_name):
         end_time = match.group(3)
         end_ampm = match.group(4)
 
-        # Inherit AM/PM if missing
+        # inherit am/pm if missing
         if not start_ampm and end_ampm:
             start_ampm = end_ampm
 
@@ -134,44 +186,6 @@ def parse_agenda_hours(text, speaker_name):
 
     return round(total, 2)
 
-# =========================================================
-# AIRFARE LOGIC (FIXED REGION HANDLING)
-# =========================================================
-def get_region(economy_name):
-    rec = economy_lookup.get(economy_name)
-    if not rec:
-        return None
-
-    region_field = rec["fields"].get("Region")
-
-    if isinstance(region_field, dict):
-        return region_field.get("name")  # single select
-    return region_field
-
-
-def calculate_airfare(origin, host):
-    if not origin or not host:
-        return AIRFARE_BANDS["Intercontinental"]
-
-    if origin == host:
-        return AIRFARE_BANDS["Domestic"]
-
-    origin_region = get_region(origin)
-    host_region = get_region(host)
-
-    if not origin_region or not host_region:
-        return AIRFARE_BANDS["Intercontinental"]
-
-    if origin_region == host_region:
-        return AIRFARE_BANDS["Regional"]
-
-    return AIRFARE_BANDS["Intercontinental"]
-
-# =========================================================
-# FISCAL YEAR LOGIC (CORRECT)
-# =========================================================
-def derive_usg_fiscal_year(d):
-    return f"FY{str(d.year + 1)[-2:]}" if d.month >= 10 else f"FY{str(d.year)[-2:]}"
 
 # =========================================================
 # UI
@@ -204,7 +218,7 @@ st.header("B. Travel")
 firm = st.selectbox("Firm", sorted(firm_lookup.keys()))
 host = st.selectbox("Host Economy", sorted(economy_lookup.keys()))
 
-firm_origin = firm_lookup.get(firm, {}).get("fields", {}).get("Economy")
+firm_origin = get_firm_origin_economy(firm)
 
 auto_airfare = calculate_airfare(firm_origin, host)
 
@@ -246,7 +260,7 @@ if engagement_record:
 st.header("D. Review")
 
 total_value = round(labor_value + travel_value, 2)
-fiscal_year = derive_usg_fiscal_year(date.today())
+fiscal_year = f"FY{str(date.today().year)[-2:]}"
 
 st.metric("Labor Value", f"${labor_value:,.2f}")
 st.metric("Travel Value", f"${travel_value:,.2f}")
