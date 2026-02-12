@@ -10,8 +10,8 @@ from PyPDF2 import PdfReader
 # PAGE CONFIG
 # =========================================================
 st.set_page_config(page_title="OT5 Valuation Tool", layout="centered")
-st.title("OT5 / PSE-4 Private Sector Valuation Tool")
-st.caption("Agenda-based labor valuation • Region-based airfare • Airtable submission")
+st.title("US APEC-RISE Private Sector Valuation Tool")
+st.caption("Standardized private sector contribution valuation tool with automated LOE and travel cost logic.")
 
 # =========================================================
 # AIRTABLE CONFIG
