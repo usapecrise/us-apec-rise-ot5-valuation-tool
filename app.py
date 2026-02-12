@@ -44,7 +44,7 @@ AIRFARE_BANDS = {
 }
 
 # =========================================================
-# LOAD AIRTABLE TABLES (NO CACHING)
+# LOAD AIRTABLE TABLES
 # =========================================================
 def load_full_table(table_name):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{urllib.parse.quote(table_name)}"
@@ -64,12 +64,10 @@ def load_full_table(table_name):
     return records
 
 
-# Load tables fresh every run
 economy_records = load_full_table("Economy Reference List")
 firm_records = load_full_table("OT4 Private Sector Firms")
 workshop_records = load_full_table("Workshop Reference List")
 
-# Convert to dictionaries
 economy_lookup = {
     rec["fields"]["Economy"]: rec
     for rec in economy_records
@@ -89,7 +87,7 @@ workshop_lookup = {
 }
 
 # =========================================================
-# AGENDA PARSING (ROBUST)
+# AGENDA PARSING (FIXED + ROBUST)
 # =========================================================
 def extract_text(uploaded_file):
     reader = PdfReader(BytesIO(uploaded_file.read()))
@@ -97,14 +95,13 @@ def extract_text(uploaded_file):
 
 
 def parse_agenda_hours(text, speaker_name):
-    if not speaker_name:
+    if not speaker_name or not text:
         return 0.0
 
     text = text.replace("–", "-")
     speaker_name = speaker_name.lower()
 
     pattern = r"(\d{1,2}:\d{2})\s*(am|pm)?\s*-\s*(\d{1,2}:\d{2})\s*(am|pm)?"
-
     matches = list(re.finditer(pattern, text, re.IGNORECASE))
 
     total = 0.0
@@ -115,37 +112,66 @@ def parse_agenda_hours(text, speaker_name):
         end_time = match.group(3)
         end_ampm = match.group(4)
 
+        # Inherit AM/PM if missing
+        if not start_ampm and end_ampm:
+            start_ampm = end_ampm
+
+        if not start_ampm or not end_ampm:
+            continue
+
         block_start = match.end()
         block_end = matches[i+1].start() if i+1 < len(matches) else len(text)
         block = text[block_start:block_end].lower()
 
         if speaker_name in block:
-            start_dt = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
-            end_dt = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
-            diff = (end_dt - start_dt).seconds / 3600
-            total += diff
+            try:
+                start_dt = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
+                end_dt = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
+                diff = (end_dt - start_dt).seconds / 3600
+                total += diff
+            except:
+                continue
 
     return round(total, 2)
 
+# =========================================================
+# AIRFARE LOGIC (FIXED REGION HANDLING)
+# =========================================================
+def get_region(economy_name):
+    rec = economy_lookup.get(economy_name)
+    if not rec:
+        return None
 
-# =========================================================
-# AIRFARE LOGIC USING REGION FIELD
-# =========================================================
+    region_field = rec["fields"].get("Region")
+
+    if isinstance(region_field, dict):
+        return region_field.get("name")  # single select
+    return region_field
+
+
 def calculate_airfare(origin, host):
-    origin_region = economy_lookup.get(origin, {}).get("fields", {}).get("Region")
-    host_region = economy_lookup.get(host, {}).get("fields", {}).get("Region")
-
-    if not origin_region or not host_region:
+    if not origin or not host:
         return AIRFARE_BANDS["Intercontinental"]
 
     if origin == host:
         return AIRFARE_BANDS["Domestic"]
+
+    origin_region = get_region(origin)
+    host_region = get_region(host)
+
+    if not origin_region or not host_region:
+        return AIRFARE_BANDS["Intercontinental"]
 
     if origin_region == host_region:
         return AIRFARE_BANDS["Regional"]
 
     return AIRFARE_BANDS["Intercontinental"]
 
+# =========================================================
+# FISCAL YEAR LOGIC (CORRECT)
+# =========================================================
+def derive_usg_fiscal_year(d):
+    return f"FY{str(d.year + 1)[-2:]}" if d.month >= 10 else f"FY{str(d.year)[-2:]}"
 
 # =========================================================
 # UI
@@ -220,7 +246,7 @@ if engagement_record:
 st.header("D. Review")
 
 total_value = round(labor_value + travel_value, 2)
-fiscal_year = f"FY{str(date.today().year)[-2:]}"
+fiscal_year = derive_usg_fiscal_year(date.today())
 
 st.metric("Labor Value", f"${labor_value:,.2f}")
 st.metric("Travel Value", f"${travel_value:,.2f}")
