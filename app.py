@@ -66,7 +66,7 @@ def load_full_table(table_name):
 
 economy_records = load_full_table("Economy Reference List")
 firm_records = load_full_table("OT4 Private Sector Firms")
-workshop_records = load_full_table("Workshop Reference List")
+workshop_records = load_full_table("tblHDKuzrfVDSRuc3")
 
 # Lookup dictionaries
 economy_lookup = {
