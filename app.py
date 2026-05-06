@@ -67,26 +67,61 @@ def load_full_table(table_name):
 economy_records = load_full_table("Economy Reference List")
 firm_records = load_full_table("OT4 Private Sector Firms")
 workshop_records = load_full_table("tblHDKuzrfVDSRuc3")
+# =========================================================
+# LOOKUP DICTIONARIES
+# =========================================================
 
-# Lookup dictionaries
-economy_lookup = {
-    rec["fields"]["Economy"]: rec
-    for rec in economy_records
-    if "Economy" in rec["fields"]
-}
+economy_lookup = {}
 
-firm_lookup = {
-    rec["fields"]["Firm"]: rec
-    for rec in firm_records
-    if "Firm" in rec["fields"]
-}
+for rec in economy_records:
 
-workshop_lookup = {
-    rec["fields"]["Workshop"]: rec
-    for rec in workshop_records
-    if "Workshop" in rec["fields"]
-}
+    fields = rec.get("fields", {})
 
+    economy_name = fields.get("Economy")
+
+    if economy_name:
+        economy_lookup[economy_name] = rec
+
+
+firm_lookup = {}
+
+for rec in firm_records:
+
+    fields = rec.get("fields", {})
+
+    firm_name = fields.get("Firm")
+
+    if firm_name:
+        firm_lookup[firm_name] = rec
+
+
+# =========================================================
+# ENGAGEMENT LOOKUP
+# =========================================================
+
+workshop_lookup = {}
+
+for rec in workshop_records:
+
+    fields = rec.get("fields", {})
+
+    # Airtable field is called Engagement
+    engagement_name = fields.get("Engagement")
+
+    # Handle linked fields or arrays safely
+    if isinstance(engagement_name, list):
+
+        if engagement_name:
+            engagement_name = engagement_name[0]
+        else:
+            engagement_name = None
+
+    if engagement_name:
+        workshop_lookup[engagement_name] = rec
+
+
+# OPTIONAL DEBUGGING
+# st.write(workshop_lookup.keys())
 # =========================================================
 # REGION LOGIC
 # =========================================================
