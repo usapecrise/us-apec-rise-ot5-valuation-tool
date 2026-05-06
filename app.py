@@ -147,24 +147,57 @@ def extract_text(uploaded_file):
 
 
 def parse_agenda_hours(text, speaker_name):
+
     if not text or not speaker_name:
         return 0.0
 
-    text = text.replace("–", "-")
-    speaker_name = speaker_name.lower()
+    # =====================================================
+    # NORMALIZE TEXT
+    # =====================================================
 
-    pattern = r"(\d{1,2}:\d{2})\s*(am|pm)?\s*-\s*(\d{1,2}:\d{2})\s*(am|pm)?"
-    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+    text = text.lower()
+
+    # normalize dashes
+    text = text.replace("–", "-")
+    text = text.replace("—", "-")
+
+    # normalize weird spacing/newlines
+    text = re.sub(r"\s+", " ", text)
+
+    # normalize time separators
+    # converts 12.10 -> 12:10
+    text = re.sub(r"(\d{1,2})\.(\d{2})", r"\1:\2", text)
+
+    # remove punctuation except colon/hyphen
+    cleaned_text = re.sub(r"[^a-z0-9:\-\s]", "", text)
+
+    speaker_name = re.sub(
+        r"[^a-z0-9\s]",
+        "",
+        speaker_name.lower()
+    ).strip()
+
+    # =====================================================
+    # FIND TIME BLOCKS
+    # =====================================================
+
+    pattern = (
+        r"(\d{1,2}:\d{2})\s*(am|pm)?\s*-\s*"
+        r"(\d{1,2}:\d{2})\s*(am|pm)?"
+    )
+
+    matches = list(re.finditer(pattern, cleaned_text))
 
     total = 0.0
 
     for i, match in enumerate(matches):
+
         start_time = match.group(1)
         start_ampm = match.group(2)
         end_time = match.group(3)
         end_ampm = match.group(4)
 
-        # inherit am/pm if missing
+        # inherit AM/PM if missing
         if not start_ampm and end_ampm:
             start_ampm = end_ampm
 
@@ -172,21 +205,41 @@ def parse_agenda_hours(text, speaker_name):
             continue
 
         block_start = match.end()
-        block_end = matches[i+1].start() if i+1 < len(matches) else len(text)
-        block = text[block_start:block_end].lower()
+
+        if i + 1 < len(matches):
+            block_end = matches[i + 1].start()
+        else:
+            block_end = len(cleaned_text)
+
+        block = cleaned_text[block_start:block_end]
+
+        # =================================================
+        # SPEAKER DETECTION
+        # =================================================
 
         if speaker_name in block:
+
             try:
-                start_dt = datetime.strptime(f"{start_time} {start_ampm}", "%I:%M %p")
-                end_dt = datetime.strptime(f"{end_time} {end_ampm}", "%I:%M %p")
-                diff = (end_dt - start_dt).seconds / 3600
+                start_dt = datetime.strptime(
+                    f"{start_time} {start_ampm}",
+                    "%I:%M %p"
+                )
+
+                end_dt = datetime.strptime(
+                    f"{end_time} {end_ampm}",
+                    "%I:%M %p"
+                )
+
+                diff = (
+                    end_dt - start_dt
+                ).seconds / 3600
+
                 total += diff
-            except:
+
+            except Exception:
                 continue
 
     return round(total, 2)
-
-
 # =========================================================
 # UI
 # =========================================================
